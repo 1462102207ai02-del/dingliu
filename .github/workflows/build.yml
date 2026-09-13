@@ -46,10 +46,17 @@ jobs:
               tar -xJf /tmp/tc.tar.xz -C $THEOS/toolchain/
             fi
             [ -x $THEOS/toolchain/linux/iphone/bin/clang ] || { echo "::error::toolchain clang missing"; exit 1; }
-            # patched SDK (official install-sdk)
-            if ! ls $THEOS/sdks/ | grep -q sdk; then
-              $THEOS/bin/install-sdk latest
+            # patched SDK (official install-sdk, with retry + clone fallback)
+            if ! ls $THEOS/sdks/ 2>/dev/null | grep -q sdk; then
+              for i in 1 2 3; do
+                $THEOS/bin/install-sdk latest && break || { echo "install-sdk attempt $i failed"; sleep 8; }
+              done
             fi
+            if ! ls $THEOS/sdks/ 2>/dev/null | grep -q sdk; then
+              rm -rf $THEOS/sdks
+              git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks || true
+            fi
+            ls $THEOS/sdks/ 2>/dev/null | grep -q sdk || { echo "::error::no SDK available"; exit 1; }
             ls $THEOS/sdks/ | head
             $THEOS/toolchain/linux/iphone/bin/clang --version | head -2
             echo "THEOS=$THEOS" >> $GITHUB_ENV
