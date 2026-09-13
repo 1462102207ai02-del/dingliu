@@ -67,14 +67,16 @@ jobs:
           set -o pipefail
           mkdir -p /tmp/logs
           {
-            if ! which ldid; then
-              for i in 1 2 3; do
-                curl -fL --retry 3 -o /tmp/ldid_bin https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64 && break
-                echo "curl attempt $i failed"; sleep 5
-              done
-              [ -f /tmp/ldid_bin ] || { echo "::error::ldid download failed"; exit 1; }
-              sudo install -m 755 /tmp/ldid_bin /usr/local/bin/ldid
-            fi
+            set -e
+            # 无条件用 ProcursusTeam 最新预编译 ldid 覆盖（apt 的旧版 ldid
+            # 对含 chained fixups 的 Mach-O 重签会写出乱码签名偏移）
+            for i in 1 2 3; do
+              curl -fL --retry 3 -o /tmp/ldid_bin https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64 && break
+              echo "curl attempt $i failed"; sleep 5
+            done
+            [ -f /tmp/ldid_bin ] || { echo "::error::ldid download failed"; exit 1; }
+            sudo install -m 755 /tmp/ldid_bin /usr/local/bin/ldid
+            hash -r
             which ldid
             ldid -V || true
           } 2>&1 | tee /tmp/logs/ldid.log
