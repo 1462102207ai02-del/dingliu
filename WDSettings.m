@@ -1,7 +1,6 @@
 #import "WDSettings.h"
 #import "WDPrefs.h"
 #import "WDCatalog.h"
-#import "WDStyle.h"
 
 @interface WDClassDetailController : UITableViewController
 @property (nonatomic, copy) NSString *className;

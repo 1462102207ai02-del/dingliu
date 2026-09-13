@@ -1,6 +1,5 @@
 // WechatDuo — 微信全页面卡片化
-// 视觉策略：连续圆角 + 双侧缩进（相对父视图宽度重算，绝不累加）+ 卡片底板
-// 不依赖 Substrate / Logos，纯 runtime，TrollFools 裸 dylib。
+// 视觉：连续圆角 + 列表卡片底板缩进。热路径不写 frame / 不设 mask / 不分配 NSString。
 
 #ifndef WDCommon_h
 #define WDCommon_h
@@ -11,33 +10,34 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-#define WD_VERSION      @"1.0.2"
+#define WD_VERSION_C    "1.0.3"
+#define WD_VERSION      @WD_VERSION_C
 #define WD_DISPLAY_NAME @"WechatDuo"
 #define WD_SETTINGS_CLS @"WDSettingsController"
 #define WD_LOG_NAME     @"WechatDuo.log"
 
 typedef NS_ENUM(NSInteger, WDGroup) {
-    WDGroupNav     = 0,  // 顶栏
-    WDGroupTab     = 1,  // 底栏
-    WDGroupBanner  = 2,  // 横幅
-    WDGroupSearch  = 3,  // 搜索
-    WDGroupList    = 4,  // 列表
-    WDGroupHeader  = 5,  // 区头
-    WDGroupInput   = 6,  // 输入
-    WDGroupBubble  = 7,  // 气泡
-    WDGroupToast   = 8,  // 提示
-    WDGroupSheet   = 9,  // 弹层
-    WDGroupFinder  = 10, // 视频号
-    WDGroupPay     = 11, // 钱包
+    WDGroupNav     = 0,
+    WDGroupTab     = 1,
+    WDGroupBanner  = 2,
+    WDGroupSearch  = 3,
+    WDGroupList    = 4,
+    WDGroupHeader  = 5,
+    WDGroupInput   = 6,
+    WDGroupBubble  = 7,
+    WDGroupToast   = 8,
+    WDGroupSheet   = 9,
+    WDGroupFinder  = 10,
+    WDGroupPay     = 11,
     WDGroupCount   = 12
 };
 
 typedef NS_ENUM(NSInteger, WDKind) {
-    WDKindChrome = 0,  // 顶栏/底栏/输入栏：相对 window/superview 缩进
-    WDKindBanner = 1,  // 横幅/通知条
-    WDKindCell   = 2,  // 列表 cell：按 section 位置切圆角
-    WDKindView   = 3,  // 普通视图：自身圆角 + 可选缩进
-    WDKindBubble = 4   // 气泡：只圆角不缩进（避免把气泡挤扁）
+    WDKindChrome = 0,
+    WDKindBanner = 1,
+    WDKindCell   = 2,
+    WDKindView   = 3,
+    WDKindBubble = 4
 };
 
 typedef struct {
@@ -45,9 +45,9 @@ typedef struct {
     const char *zh;
     int group;
     int kind;
-    float defRadius;   // 0 = 跟随全局
-    float defInset;    // 0 = 跟随全局；气泡默认 0
-    int   defOn;       // 1 默认开
+    float defRadius;
+    float defInset;
+    int   defOn;
 } WDItem;
 
 #endif

@@ -19,4 +19,5 @@
 
 日志：微信沙盒 `Documents/WechatDuo.log`，以及 `TMPDIR/WechatDuo.log`
 
+v1.0.3：每类独立 layout IMP，禁止按实例 class 找 orig；启动后再装饰。
 v1.0.2：constructor 延迟安装；不 hook 系统类；layout 路径不写 frame。

@@ -111,14 +111,15 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.2
-          name: WechatDuo v1.0.2
+          tag_name: v1.0.3
+          name: WechatDuo v1.0.3
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
-            - **v1.0.2 闪退修复**：constructor 不再同步 swizzle；不 hook 系统类；
-              只改本类方法；去掉 setFrame:；layout 路径不再写 frame（改 mask / 卡片底板）。
-              纯 C 日志写到 TMPDIR 与 Documents/WechatDuo.log。
+            - **v1.0.3**：修掉「hooks 装完即闪退」。97 个类共用一个 layout IMP，
+              按实例 class 找 orig，子类 super 会递归把栈打爆（无 SIGNAL 日志）。
+              现每类独立 block IMP；只替换本类已有 layoutSubviews；启动 2.5s 后才装饰。
+            - **v1.0.2**：constructor 延迟；不 hook 系统类；不写 frame。
             - **v1.0.1**：签名器 LC_CODE_SIGNATURE=0x1D，TrollFools 可注入。
 
             - 顶栏 / 底栏 / 横幅 / 列表 / 搜索 / 输入 / 气泡 / 弹层 / 视频号 / 钱包

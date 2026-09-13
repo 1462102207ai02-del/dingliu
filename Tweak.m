@@ -1,12 +1,22 @@
 // WechatDuo — 微信全页面卡片化
 // TrollFools 裸 dylib：纯 ObjC runtime，不链 Substrate。
 //
-// v1.0.2 闪退修复：
-// 1. constructor 里禁止 ObjC / NSUserDefaults / 同步 swizzle
-// 2. 只 hook 本类方法；没有则 class_addMethod，绝不 method_setImplementation 改父类
-// 3. 不 hook 系统类（UITableViewCell / UITableView / UISearchBar …）
-// 4. 不再 hook setFrame:；layout 路径不写 frame
-// 5. orig IMP 跳过我们自己的 IMP，避免父子互相递归
+// v1.0.3（对照用户日志）：
+//   [ctor] → [boot main] → [hooks: ok=97] 之后闪退，无 SIGNAL。
+//   栈已耗尽：97 个类共用同一个 WDLayoutIMP，WDOrig(self) 按实例 class 找 orig。
+//   子类 [super layoutSubviews] → 父类已被换成同一 IMP → 再取子类 orig → 无限递归。
+//   SIGKILL / 栈耗尽时 signal handler 写不出日志。这是 dingliu 同一错误。
+//
+// 禁止：
+//   - 共享 IMP + 按实例 class 沿继承链找 orig
+//   - class_addMethod 给没实现 layoutSubviews 的类补方法
+//   - 热路径 NSStringFromClass / NSUserDefaults / layer.mask / 写宿主 frame
+//   - 启动期装饰、reloadData、hook 系统类 / 表类 / 输入框
+//
+// 只做：
+//   - 本类已有 layoutSubviews 才替换
+//   - 每类独立 block IMP，orig 捕获在闭包里，super 不会撞回同一条
+//   - 启动 2.5s 后才允许装饰
 
 #import "WDCommon.h"
 #import "WDCatalog.h"
@@ -21,17 +31,25 @@
 #import <stdlib.h>
 #import <stdarg.h>
 
-static NSMapTable *gOrig = nil;      // "ClassName|sel" -> NSValue(IMP)
-static NSMapTable *gClassItem = nil; // Class -> NSValue(WDItem*)
 static char gLogHome[512];
 static char gLogTmp[512];
+static volatile int gLive = 0;
+static volatile int gDepth = 0;
+static int gInstalled = 0;
 static int gSafe = 0;
+static BOOL gMaster = YES;
+static BOOL gContinuous = YES;
 
-#pragma mark - 纯 C 日志（constructor 可用）
+typedef struct { char on; float r; float i; } WDSnap;
+static WDSnap gSnap[160];
+
+#define WD_MAX_DEPTH 6
+
+#pragma mark - C 日志
 
 static void WDLogC(const char *msg) {
     char line[768];
-    int n = snprintf(line, sizeof(line), "[WechatDuo v%s] %s\n", "1.0.2", msg ? msg : "");
+    int n = snprintf(line, sizeof(line), "[WechatDuo v%s] %s\n", WD_VERSION_C, msg ? msg : "");
     if (n <= 0) return;
     const char *paths[2] = { gLogTmp[0] ? gLogTmp : NULL,
                              gLogHome[0] ? gLogHome : NULL };
@@ -55,31 +73,33 @@ static void WDInitLogPaths(void) {
 }
 
 static void WDSignal(int sig) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "SIGNAL %d", sig);
+    char buf[80];
+    snprintf(buf, sizeof(buf), "SIGNAL %d live=%d depth=%d", sig, gLive, gDepth);
     WDLogC(buf);
     signal(sig, SIG_DFL);
     raise(sig);
 }
 
-static void WDLog(NSString *fmt, ...) {
-    va_list ap; va_start(ap, fmt);
-    NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
-    va_end(ap);
-    WDLogC(s.UTF8String ?: "");
-}
+#pragma mark - 黑名单
 
-#pragma mark - swizzle
-
-static NSString *WDKey(Class c, SEL s) {
-    return [NSStringFromClass(c) stringByAppendingFormat:@"|%@", NSStringFromSelector(s)];
-}
-
-static void WDLayoutIMP(id self, SEL _cmd);
-static id WDGetterIMP(id self, SEL _cmd);
-
-static BOOL WDIsOurs(IMP imp) {
-    return imp == (IMP)WDLayoutIMP || imp == (IMP)WDGetterIMP;
+static BOOL WDSkipName(const char *name) {
+    if (!name || !name[0]) return YES;
+    static const char *kSkip[] = {
+        "UIView", "UIControl", "UIScrollView", "UIButton", "UILabel", "UIImageView",
+        "UITableView", "UITableViewCell", "UITableViewHeaderFooterView",
+        "UITableViewCellContentView", "UICollectionView", "UICollectionViewCell",
+        "UISearchBar", "UISearchBarTextField", "UITextField", "UITextView",
+        "UINavigationBar", "UITabBar", "UIToolbar", "UIWindow",
+        "MMTableView", "WCTableView",
+        "MMGrowTextView", "MMGrowTextViewWithExtras",
+        NULL
+    };
+    for (int i = 0; kSkip[i]; i++) {
+        if (strcmp(name, kSkip[i]) == 0) return YES;
+    }
+    if (strncmp(name, "UI", 2) == 0) return YES;
+    if (strncmp(name, "_UI", 3) == 0) return YES;
+    return NO;
 }
 
 static BOOL WDOwns(Class c, SEL s) {
@@ -95,150 +115,117 @@ static BOOL WDOwns(Class c, SEL s) {
     return yes;
 }
 
-static BOOL WDSkipName(const char *name) {
-    if (!name) return YES;
-    static const char *kSkip[] = {
-        "UIView", "UITableViewCell", "UITableView", "UICollectionViewCell",
-        "UISearchBar", "UISearchBarTextField", "UITableViewHeaderFooterView",
-        "UINavigationBar", "UITabBar", "UIScrollView", "UIControl",
-        "MMTableView", "WCTableView",
-        NULL
-    };
-    for (int i = 0; kSkip[i]; i++) {
-        if (strcmp(name, kSkip[i]) == 0) return YES;
+#pragma mark - 快照（热路径不碰 NSUserDefaults / NSString）
+
+static void WDSnapshot(void) {
+    WDPrefs *p = [WDPrefs shared];
+    gMaster = p.master;
+    gContinuous = p.continuous;
+    int n = WDCatalogCount();
+    if (n > 160) n = 160;
+    const WDItem *items = WDCatalogItems();
+    for (int i = 0; i < n; i++) {
+        NSString *name = @(items[i].cls);
+        gSnap[i].on = [p enabledForClass:name def:items[i].defOn != 0] ? 1 : 0;
+        gSnap[i].r = (float)[p radiusForClass:name def:items[i].defRadius];
+        gSnap[i].i = (float)[p insetForClass:name def:items[i].defInset];
+        if (items[i].kind == WDKindBubble) gSnap[i].i = 0;
     }
-    return NO;
 }
 
-static IMP WDOrig(id self, SEL cmd) {
-    if (!gOrig || !self) return NULL;
-    for (Class c = object_getClass(self); c; c = class_getSuperclass(c)) {
-        NSValue *v = [gOrig objectForKey:WDKey(c, cmd)];
-        if (!v) continue;
-        IMP p = (IMP)[v pointerValue];
-        if (p && !WDIsOurs(p)) return p;
+static void WDDecorate(id self, int idx, int kind) {
+    if (idx < 0 || idx >= 160) return;
+    if (!gSnap[idx].on) return;
+    if (![self isKindOfClass:[UIView class]]) return;
+    UIView *v = (UIView *)self;
+    CGFloat r = gSnap[idx].r;
+    if (kind == WDKindCell && [v isKindOfClass:[UITableViewCell class]]) {
+        WDStyleCell((UITableViewCell *)v, gSnap[idx].i, r, gContinuous);
+        return;
     }
-    return NULL;
+    WDStyleRound(v, r, gContinuous);
 }
 
-static IMP WDResolveOrig(Class c, SEL s, IMP cur) {
-    if (cur && !WDIsOurs(cur)) return cur;
-    for (Class p = class_getSuperclass(c); p; p = class_getSuperclass(p)) {
-        NSValue *v = gOrig ? [gOrig objectForKey:WDKey(p, s)] : nil;
-        if (v) {
-            IMP o = (IMP)[v pointerValue];
-            if (o && !WDIsOurs(o)) return o;
-        }
-        Method m = class_getInstanceMethod(p, s);
-        if (!m) continue;
-        IMP o = method_getImplementation(m);
-        if (o && !WDIsOurs(o)) return o;
-    }
-    return NULL;
-}
+#pragma mark - 每类独立 IMP（捕获该类 orig，super 不会撞回同一条）
 
-static BOOL WDHookLayout(Class c) {
+static BOOL WDHookLayout(Class c, int idx, int kind) {
     if (!c) return NO;
     SEL s = @selector(layoutSubviews);
+    if (!WDOwns(c, s)) return NO;
     Method m = class_getInstanceMethod(c, s);
     if (!m) return NO;
-    IMP cur = method_getImplementation(m);
-    if (WDIsOurs(cur) && WDOwns(c, s)) return NO;
-
-    if (!gOrig) gOrig = [NSMapTable strongToStrongObjectsMapTable];
-    IMP orig = WDResolveOrig(c, s, cur);
+    IMP orig = method_getImplementation(m);
     if (!orig) return NO;
 
-    [gOrig setObject:[NSValue valueWithPointer:orig] forKey:WDKey(c, s)];
-
-    if (WDOwns(c, s)) {
-        method_setImplementation(m, (IMP)WDLayoutIMP);
-        return YES;
-    }
-    return class_addMethod(c, s, (IMP)WDLayoutIMP, method_getTypeEncoding(m));
-}
-
-static BOOL WDHookSel(Class c, SEL s, IMP neu) {
-    if (!c || !s || !WDOwns(c, s)) return NO;
-    Method m = class_getInstanceMethod(c, s);
-    if (!m) return NO;
-    IMP cur = method_getImplementation(m);
-    if (WDIsOurs(cur)) return NO;
-    if (!gOrig) gOrig = [NSMapTable strongToStrongObjectsMapTable];
-    [gOrig setObject:[NSValue valueWithPointer:cur] forKey:WDKey(c, s)];
-    method_setImplementation(m, neu);
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        ((void(*)(id, SEL))orig)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (gDepth >= WD_MAX_DEPTH) return;
+        gDepth++;
+        @try { WDDecorate(slf, idx, kind); } @catch (NSException *e) {}
+        gDepth--;
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
     return YES;
 }
 
-static const WDItem *WDItemForView(id self) {
-    if (!self || !gClassItem) return NULL;
-    Class isa = object_getClass(self);
-    NSValue *cached = [gClassItem objectForKey:(id)isa];
-    if (cached) return (const WDItem *)[cached pointerValue];
-    const WDItem *found = NULL;
-    for (Class c = isa; c; c = class_getSuperclass(c)) {
-        NSValue *v = [gClassItem objectForKey:(id)c];
-        if (v) { found = (const WDItem *)[v pointerValue]; break; }
-        if (c == [UIView class] || c == [NSObject class]) break;
-    }
-    [gClassItem setObject:[NSValue valueWithPointer:(void *)found] forKey:(id)isa];
-    return found;
-}
-
-static void WDDispatch(id self) {
-    if (!self) return;
-    const WDItem *it = WDItemForView(self);
-    if (!it) return;
-    if (![self isKindOfClass:[UIView class]]) return;
-    switch (it->kind) {
-        case WDKindChrome: WDApplyChrome(self, it); break;
-        case WDKindBanner: WDApplyBanner(self, it); break;
-        case WDKindCell: {
-            if (![self isKindOfClass:[UITableViewCell class]]) {
-                WDApplyView(self, it);
-                break;
-            }
-            WDApplyCell((UITableViewCell *)self, nil, nil, it);
-            break;
-        }
-        case WDKindBubble: WDApplyBubble(self, it); break;
-        default: WDApplyView(self, it); break;
-    }
-}
-
-static void WDLayoutIMP(id self, SEL _cmd) {
-    IMP orig = WDOrig(self, _cmd);
-    if (orig && orig != (IMP)WDLayoutIMP) {
-        ((void(*)(id, SEL))orig)(self, _cmd);
-    }
-    @try { WDDispatch(self); } @catch (NSException *e) {}
-}
-
-static id WDGetterIMP(id self, SEL _cmd) {
-    IMP orig = WDOrig(self, _cmd);
-    id r = orig ? ((id(*)(id, SEL))orig)(self, _cmd) : nil;
-    @try {
-        if ([r isKindOfClass:[UIView class]]) {
-            const WDItem *it = NULL;
-            if (gClassItem) {
-                NSValue *v = [gClassItem objectForKey:(id)[self class]];
-                if (v) it = (const WDItem *)[v pointerValue];
-            }
-            if (it) WDApplyView(r, it);
-        }
-    } @catch (NSException *e) {}
-    return r;
-}
+#pragma mark - getter（只改本类已有方法）
 
 static const struct { const char *cls; const char *sel; } kGetters[] = {
     {"WCSearchViewController", "navBarContainerView"},
     {"MMNewMsgContentNavBar", "bgMaskView"},
-    {"MMInputMsgReferView", "thumbImageView"},
 };
+static IMP gGetOrig[2];
+static int gGetIdx[2] = { -1, -1 };
 
-#pragma mark - 设置入口（只改本类方法）
+static id WDGetterIMP(id self, SEL _cmd) {
+    IMP orig = NULL;
+    int idx = -1;
+    for (size_t i = 0; i < 2; i++) {
+        if (!gGetOrig[i]) continue;
+        if (sel_isEqual(_cmd, sel_registerName(kGetters[i].sel))) {
+            orig = gGetOrig[i];
+            idx = gGetIdx[i];
+            break;
+        }
+    }
+    id r = orig ? ((id(*)(id, SEL))orig)(self, _cmd) : nil;
+    if (gLive && gMaster && !gSafe && idx >= 0 && [r isKindOfClass:[UIView class]]) {
+        WDStyleRound((UIView *)r, gSnap[idx].r, gContinuous);
+    }
+    return r;
+}
+
+static int WDIndexOfClassName(const char *name) {
+    int n = WDCatalogCount();
+    const WDItem *items = WDCatalogItems();
+    for (int i = 0; i < n; i++) {
+        if (strcmp(items[i].cls, name) == 0) return i;
+    }
+    return -1;
+}
+
+static void WDInstallGetters(void) {
+    for (size_t i = 0; i < sizeof(kGetters)/sizeof(kGetters[0]); i++) {
+        Class c = objc_getClass(kGetters[i].cls);
+        if (!c) continue;
+        SEL s = sel_registerName(kGetters[i].sel);
+        if (!WDOwns(c, s)) continue;
+        Method m = class_getInstanceMethod(c, s);
+        if (!m) continue;
+        IMP cur = method_getImplementation(m);
+        if (cur == (IMP)WDGetterIMP) continue;
+        gGetOrig[i] = cur;
+        gGetIdx[i] = WDIndexOfClassName(kGetters[i].cls);
+        method_setImplementation(m, (IMP)WDGetterIMP);
+    }
+}
+
+#pragma mark - 设置入口
 
 static IMP gSec, gRows, gCell, gSel;
+
 static NSInteger WDMoreSec(id self, SEL cmd, id tv) {
     NSInteger n = gSec ? ((NSInteger(*)(id, SEL, id))gSec)(self, cmd, tv) : 0;
     return n + 1;
@@ -276,9 +263,7 @@ static void WDHookOwnedOrAdd(Class cls, SEL sel, IMP neu, IMP *slot) {
     if (!m) return;
     IMP cur = method_getImplementation(m);
     if (cur == neu) return;
-    IMP orig = WDResolveOrig(cls, sel, cur);
-    if (!orig) orig = cur;
-    *slot = orig;
+    *slot = cur;
     if (WDOwns(cls, sel)) {
         method_setImplementation(m, neu);
         return;
@@ -286,8 +271,8 @@ static void WDHookOwnedOrAdd(Class cls, SEL sel, IMP neu, IMP *slot) {
     class_addMethod(cls, sel, neu, method_getTypeEncoding(m));
 }
 
-static void WDHookEntry(NSString *clsName) {
-    Class cls = NSClassFromString(clsName);
+static void WDHookEntry(const char *clsName) {
+    Class cls = objc_getClass(clsName);
     if (!cls) return;
     WDHookOwnedOrAdd(cls, @selector(numberOfSectionsInTableView:), (IMP)WDMoreSec, &gSec);
     WDHookOwnedOrAdd(cls, @selector(tableView:numberOfRowsInSection:), (IMP)WDMoreRows, &gRows);
@@ -317,86 +302,78 @@ static void WDMinVDL(id self, SEL cmd) {
 
 static void WDHookPlugin(void) {
     if (gMinVDL) return;
-    Class min = NSClassFromString(@"MinimizeViewController");
+    Class min = objc_getClass("MinimizeViewController");
     if (!min) return;
     SEL s = @selector(viewDidLoad);
     Method m = class_getInstanceMethod(min, s);
     if (!m) return;
-    IMP cur = method_getImplementation(m);
-    gMinVDL = WDResolveOrig(min, s, cur) ?: cur;
-    if (WDOwns(min, s)) {
-        method_setImplementation(m, (IMP)WDMinVDL);
-    } else {
-        class_addMethod(min, s, (IMP)WDMinVDL, method_getTypeEncoding(m));
-    }
+    gMinVDL = method_getImplementation(m);
+    if (WDOwns(min, s)) method_setImplementation(m, (IMP)WDMinVDL);
+    else class_addMethod(min, s, (IMP)WDMinVDL, method_getTypeEncoding(m));
 }
 
 #pragma mark - 安装
 
-static void WDRememberClass(Class c, const WDItem *it) {
-    if (!c || !it) return;
-    if (!gClassItem) gClassItem = [NSMapTable strongToStrongObjectsMapTable];
-    [gClassItem setObject:[NSValue valueWithPointer:(void *)it] forKey:(id)c];
-}
-
 static void WDInstallHooks(void) {
     int n = WDCatalogCount();
     const WDItem *items = WDCatalogItems();
-    int ok = 0, miss = 0, skip = 0;
+    int ok = 0, miss = 0, skip = 0, noown = 0;
     for (int i = 0; i < n; i++) {
         const char *name = items[i].cls;
         if (WDSkipName(name)) { skip++; continue; }
         Class c = objc_getClass(name);
         if (!c) { miss++; continue; }
-        WDRememberClass(c, &items[i]);
-        if (![c isSubclassOfClass:[UIView class]]) continue;
-        if (WDHookLayout(c)) ok++;
+        if (![c isSubclassOfClass:[UIView class]]) { skip++; continue; }
+        if (WDHookLayout(c, i, items[i].kind)) ok++;
+        else noown++;
     }
-    for (size_t i = 0; i < sizeof(kGetters)/sizeof(kGetters[0]); i++) {
-        Class c = objc_getClass(kGetters[i].cls);
-        if (!c) continue;
-        SEL s = sel_registerName(kGetters[i].sel);
-        WDHookSel(c, s, (IMP)WDGetterIMP);
-    }
-    char buf[128];
-    snprintf(buf, sizeof(buf), "hooks: ok=%d miss=%d skip=%d", ok, miss, skip);
+    WDInstallGetters();
+    char buf[160];
+    snprintf(buf, sizeof(buf), "hooks: ok=%d miss=%d skip=%d noown=%d", ok, miss, skip, noown);
     WDLogC(buf);
 }
 
 static void WDInstallOnce(void) {
+    if (gInstalled) return;
+    gInstalled = 1;
     @autoreleasepool {
         @try {
             [WDPrefs shared];
-            NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-            if ([ud boolForKey:@"WDSafeMode"]) {
+            WDSnapshot();
+            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WDSafeMode"]) {
                 gSafe = 1;
-                WDLogC("SAFE MODE — no visual hooks");
-                WDHookEntry(@"MoreViewController");
-                WDHookEntry(@"NewSettingViewController");
+                WDLogC("SAFE MODE");
+                WDHookEntry("MoreViewController");
+                WDHookEntry("NewSettingViewController");
                 WDHookPlugin();
                 return;
             }
             WDInstallHooks();
-            WDHookEntry(@"MoreViewController");
-            WDHookEntry(@"NewSettingViewController");
+            WDHookEntry("MoreViewController");
+            WDHookEntry("NewSettingViewController");
             WDHookPlugin();
         } @catch (NSException *e) {
-            WDLog([NSString stringWithFormat:@"install exception: %@ %@", e.name, e.reason]);
+            WDLogC("install exception");
         }
     }
+}
+
+static void WDGoLive(void) {
+    if (gLive) return;
+    WDSnapshot();
+    gLive = 1;
+    WDLogC("live");
 }
 
 static void WDBoot(void) {
     WDLogC("boot main");
     WDInstallOnce();
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ WDInstallOnce(); });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ WDInstallOnce(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2500 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{ WDGoLive(); });
     [[NSNotificationCenter defaultCenter] addObserverForName:WDPrefsDidChangeNotification
                                                       object:nil queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(__unused NSNotification *n) {
-        WDStyleVisibleTables();
+        WDSnapshot();
     }];
 }
 
