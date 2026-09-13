@@ -303,9 +303,14 @@ static UIColor *WDWantColor(int page) {
     if (!gMaster || !gPageOn[page]) return nil;
     BOOL dark = WDIsDarkMode();
     UIColor *c = nil;
-    if (gPageHex[page][dark ? 1][0]) c = WDColorForHex([NSString stringWithUTF8String:gPageHex[page][dark ? 1][0]]);
-    if (!c && dark && gPageHex[page][0][0]) c = WDColorForHex([NSString stringWithUTF8String:gPageHex[page][0][0]]);
-    if (!c && !dark && gPageHex[page][0][0]) c = WDColorForHex([NSString stringWithUTF8String:gPageHex[page][0][0]]);
+    int slot = dark ? 1 : 0;
+    if (gPageHex[page][slot][0]) {
+        c = WDColorForHex([NSString stringWithUTF8String:gPageHex[page][slot]]);
+    }
+    // 深色没单独设时沿用浅色值
+    if (!c && dark && gPageHex[page][0][0]) {
+        c = WDColorForHex([NSString stringWithUTF8String:gPageHex[page][0]]);
+    }
     return c;
 }
 
