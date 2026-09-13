@@ -15,24 +15,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip
+
       - name: Install Theos & SDK
         run: |
+          set -e
           export THEOS=$HOME/theos
-          git clone --depth=1 https://github.com/theos/theos.git $THEOS
-          git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
+          clone_theos() {
+            git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS
+          }
+          clone_sdks() {
+            git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
+          }
+          for i in 1 2 3; do
+            if [ -d $THEOS/.git ]; then break; fi
+            rm -rf $THEOS && clone_theos && break || { echo "theos clone attempt $i failed, retrying"; rm -rf $THEOS; sleep 5; }
+          done
+          [ -d $THEOS/.git ] || { echo "::error::theos clone failed after retries"; exit 1; }
+          for i in 1 2 3; do
+            if [ -d $THEOS/sdks/.git ]; then break; fi
+            rm -rf $THEOS/sdks && clone_sdks && break || { echo "sdks clone attempt $i failed, retrying"; rm -rf $THEOS/sdks; sleep 5; }
+          done
+          [ -d $THEOS/sdks/.git ] || { echo "::error::sdks clone failed after retries"; exit 1; }
+          git -C $THEOS submodule update --init --recursive || true
+          ls $THEOS/sdks/ | head
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: Install ldid
         run: |
-          git clone --depth=1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
+          for i in 1 2 3; do
+            rm -rf /tmp/ldid && git clone --depth=1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid && break || sleep 5
+          done
           cd /tmp/ldid
           make -j$(nproc) ldid
           sudo cp ./ldid /usr/local/bin/ldid
           sudo chmod +x /usr/local/bin/ldid
           ldid -V || true
-
-      - name: Install packaging tools
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip
 
       - name: Build (rootless)
         run: |
@@ -59,11 +78,12 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: dingliu v1.0.0 (你啊爸支鼎溜)
+          tag_name: v1.0.1
+          name: dingliu v1.0.1 (你啊爸支鼎溜)
           body: |
             微信 8.0.70+ 圆角美化插件
-            - `com.dingliu.wechat_1.0.0_iphoneos-arm64.deb` — rootless 越狱（Dopamine/palera1n rootless）安装包
+            - v1.0.1: 接入「插件收纳」入口（MinimizeViewController -> WCPluginsMgr），过滤 4 个微信 bundle id
+            - `com.dingliu.wechat_1.0.1_iphoneos-arm64.deb` — rootless 越狱（Dopamine/palera1n rootless）安装包
             - `dingliu.dylib` / `dingliu-trollfools-dylib.zip` — TrollFools 注入用
           files: |
             dist/*.deb
