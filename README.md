@@ -8,7 +8,7 @@
 - 每个类有中文简称，可单独开关、改圆角、改双侧缩进
 - 接入「插件收纳」：`MinimizeViewController` → `WCPluginsMgr`
 
-## 设置项结构（v1.1.3）
+## 设置项结构（v1.1.4）
 
 - **总开关**：单独一行「启用 WechatDuo」
 - **全局**：连续曲率 / 全局圆角 / 全局缩进 / 页面背景色（开关；打开后展开浅色、深色两行，只显示色块预览）
@@ -28,6 +28,7 @@
 
 日志：微信沙盒 `Documents/WechatDuo.log`，以及 `TMPDIR/WechatDuo.log`
 
+v1.1.4：非置顶会话中间行收内部 MainFrameItemView；置顶横幅走 FoldView/浮动视图；通讯录 NewContactsItemCell；「我」页挂 WCTableViewManager。
 v1.1.3：首页缩进生效（去掉 MultiMenu 早退；列表灰底露出缝）；全局复用设置页卡片；页面背景色改开关并展开浅色/深色预览；总开关单独一行。
 v1.1.2：列表按分区整段卡片（中间行左右平直，只有整体四角）；总开关记忆/恢复子开关；四页背景色合并进全局；去掉右上角完成按钮。
 v1.1.1：设置页 InsetGrouped；48pt 数字框；配置导入导出。

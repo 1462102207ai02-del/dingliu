@@ -7,11 +7,17 @@
 static const WDItem kItems[] = {
     // ===== 首页·微信 =====
     {"NewMainFrameCell",                  "MainFrameCell",  "会话行",     WDPageHome,     WDGroupList,   WDKindCell,   16, 12, 1},
-    {"MainFrameSectionFoldView",          NULL,             "折叠横幅",   WDPageHome,     WDGroupBanner, WDKindBanner, 14, 12, 1},
+    {"MainFrameItemView",                 NULL,             "会话内容",   WDPageHome,     WDGroupList,   WDKindView,   16,  0, 1},
+    {"FakeMainFrameItemView",             NULL,             "会话内容备", WDPageHome,     WDGroupList,   WDKindView,   16,  0, 1},
+    {"MainFrameSectionFoldView",          NULL,             "置顶横幅",   WDPageHome,     WDGroupBanner, WDKindBanner, 14, 12, 1},
+    {"MFBannerBtn",                       NULL,             "置顶横幅钮", WDPageHome,     WDGroupBanner, WDKindBanner, 14,  0, 1},
+    {"MFWebMMBtn",                        NULL,             "网页登录钮", WDPageHome,     WDGroupBanner, WDKindBanner, 14,  0, 1},
     {"MultiDeviceCardView",               NULL,             "多设备卡",   WDPageHome,     WDGroupBanner, WDKindBanner, 14, 12, 1},
     {"WCSearchBar",                       NULL,             "首页搜索",   WDPageHome,     WDGroupSearch, WDKindView,   14, 12, 1},
 
     // ===== 通讯录 =====
+    {"NewContactsItemCell",               NULL,             "联系人行",   WDPageContacts, WDGroupList,   WDKindCell,   14, 12, 1},
+    {"ContactsItemView",                  NULL,             "联系人内容", WDPageContacts, WDGroupList,   WDKindView,   14,  0, 1},
     {"NewContactsSearchPanelView",        NULL,             "联系人搜索", WDPageContacts, WDGroupSearch, WDKindView,   14, 12, 1},
     {"BrandProfileItemBaseCell",          NULL,             "公众号行",   WDPageContacts, WDGroupList,   WDKindCell,   14, 12, 1},
 

@@ -1,6 +1,12 @@
 // WechatDuo — 微信全页面卡片化
 // TrollFools 裸 dylib：纯 ObjC runtime，不链 Substrate。
 //
+// v1.1.4
+//   非置顶会话中间行必须 clip：contentView 始终裁剪，并收 Inner MainFrameItemView。
+//   置顶横幅是 MainFrameSectionFoldView（区头/浮动视图），不是 cell。
+//   通讯录 NewContactsItemCell + ContactsItemView 铺满，要随单元格一起收。
+//   「我」页 table.delegate 是 WCTableViewManager，不是 MoreViewController。
+//
 // v1.1.3
 //   首页会话行是 MMMultiMenuTableViewCell 子类：禁止再对 MultiMenu 早退。
 //   列表灰底 + 分区卡片底板，才能看见双侧缩进（白底上看不见缝）。
@@ -586,6 +592,80 @@ static BOOL WDHookWillDisplay(const char *clsName) {
     return ok;
 }
 
+static int gDefBannerIdx = -2;
+
+static void WDDecorateViewTree(UIView *v, int depth) {
+    if (!v || depth > 4) return;
+    if (![v isKindOfClass:[UIView class]]) return;
+    int idx = WDIdxForClass(object_getClass(v));
+    if (idx < 0 && [v isKindOfClass:[UITableViewCell class]]) {
+        WDDecorateCellIfNeeded((UITableViewCell *)v);
+    } else if (idx >= 0 && idx < 160 && gSnap[idx].on) {
+        WDDecorate(v, idx);
+    } else {
+        const char *nm = class_getName(object_getClass(v));
+        if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner") || strstr(nm, "MFBanner"))) {
+            if (gDefBannerIdx == -2) gDefBannerIdx = WDIndexOfClassName("MainFrameSectionFoldView");
+            if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) WDDecorate(v, gDefBannerIdx);
+        }
+    }
+    for (UIView *s in v.subviews) WDDecorateViewTree(s, depth + 1);
+}
+
+static BOOL WDHookWillDisplayHeader(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(tableView:willDisplayHeaderView:forSection:);
+    Method m = class_getInstanceMethod(cls, s);
+    IMP orig = m ? method_getImplementation(m) : NULL;
+    static Class hooked[16];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP stub = imp_implementationWithBlock(^(id slf, UITableView *tv, UIView *header, NSInteger section) {
+        if (orig) ((void (*)(id, SEL, id, id, NSInteger))orig)(slf, s, tv, header, section);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { WDDecorateViewTree(header, 0); } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) {
+        method_setImplementation(m, stub);
+        ok = YES;
+    } else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:@@q";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 16) hooked[hookedN++] = cls;
+    return ok;
+}
+
+static BOOL WDHookFoldUpdate(void);
+
+static BOOL WDHookViewForHeader(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(tableView:viewForHeaderInSection:);
+    if (!WDOwns(cls, s)) return NO;
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return NO;
+    IMP orig = method_getImplementation(m);
+    static Class hooked[8];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP stub = imp_implementationWithBlock(^id(id slf, UITableView *tv, NSInteger section) {
+        id r = orig ? ((id (*)(id, SEL, id, NSInteger))orig)(slf, s, tv, section) : nil;
+        if (gLive && gMaster && !gSafe && [r isKindOfClass:[UIView class]]) {
+            @try { WDDecorateViewTree((UIView *)r, 0); } @catch (NSException *e) {}
+        }
+        return r;
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
+    if (hookedN < 8) hooked[hookedN++] = cls;
+    return YES;
+}
+
 static void WDInstallTableDisplay(void) {
     static const char *kVCs[] = {
         "NewMainFrameViewController",
@@ -594,9 +674,47 @@ static void WDInstallTableDisplay(void) {
         "FindFriendEntryViewController",
         "MoreViewController",
         "NewSettingViewController",
+        "WCTableViewManager",
+        "MMTableViewInfo",
         NULL
     };
-    for (int i = 0; kVCs[i]; i++) WDHookWillDisplay(kVCs[i]);
+    for (int i = 0; kVCs[i]; i++) {
+        WDHookWillDisplay(kVCs[i]);
+        WDHookWillDisplayHeader(kVCs[i]);
+    }
+    WDHookViewForHeader("NewMainFrameViewController");
+    WDHookViewForHeader("MGSessionBoxViewController");
+    WDHookViewForHeader("WCTableViewManager");
+    WDHookViewForHeader("MMTableViewInfo");
+    WDHookFoldUpdate();
+}
+
+static BOOL WDHookFoldUpdate(void) {
+    Class cls = objc_getClass("NewMainFrameViewController");
+    if (!cls) return NO;
+    SEL s = @selector(updateTopSessionFoldView);
+    if (!WDOwns(cls, s)) return NO;
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return NO;
+    static IMP orig = NULL;
+    if (orig) return YES;
+    orig = method_getImplementation(m);
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        if (orig) ((void (*)(id, SEL))orig)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try {
+            UIView *fold = nil;
+            SEL g = @selector(topSessionFoldView);
+            if ([slf respondsToSelector:g]) {
+                fold = ((id (*)(id, SEL))objc_msgSend)(slf, g);
+            }
+            if ([fold isKindOfClass:[UIView class]]) WDDecorateViewTree(fold, 0);
+        } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
+    return YES;
 }
 
 #pragma mark - 安装
@@ -660,12 +778,46 @@ static void WDInstallOnce(void) {
     }
 }
 
+static void WDDecorateVisible(void) {
+    UIApplication *app = [UIApplication sharedApplication];
+    if (!app) return;
+    for (UIWindow *w in app.windows) {
+        if (!w) continue;
+        NSMutableArray *q = [NSMutableArray arrayWithObject:w];
+        int n = 0;
+        while (q.count && n < 800) {
+            UIView *v = q.firstObject;
+            [q removeObjectAtIndex:0];
+            n++;
+            if ([v isKindOfClass:[UITableView class]]) {
+                UITableView *tv = (UITableView *)v;
+                for (UITableViewCell *c in tv.visibleCells) {
+                    @try { WDDecorateCellIfNeeded(c); } @catch (NSException *e) {}
+                }
+                NSInteger sn = tv.numberOfSections;
+                for (NSInteger i = 0; i < sn && i < 32; i++) {
+                    UIView *h = [tv headerViewForSection:i];
+                    if (h) @try { WDDecorateViewTree(h, 0); } @catch (NSException *e) {}
+                }
+            } else {
+                const char *nm = class_getName(object_getClass(v));
+                if (nm && (strstr(nm, "FoldView") || strstr(nm, "MFBanner"))) {
+                    @try { WDDecorateViewTree(v, 0); } @catch (NSException *e) {}
+                }
+            }
+            if (v.subviews.count) [q addObjectsFromArray:v.subviews];
+        }
+    }
+}
+
 static void WDGoLive(void) {
     if (gLive) return;
     WDSnapshot();
     gLive = 1;
     WDLogC("live");
     WDPageBgStart();
+    WDStyleInvalidate();
+    @try { WDDecorateVisible(); } @catch (NSException *e) {}
 }
 
 static void WDBoot(void) {
@@ -680,6 +832,9 @@ static void WDBoot(void) {
         @try { WDRevertPass(); } @catch (NSException *e) {}
         WDStyleInvalidate();
         WDPageBgApply();
+        if (gLive && gMaster && !gSafe) {
+            @try { WDDecorateVisible(); } @catch (NSException *e) {}
+        }
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil queue:[NSOperationQueue mainQueue]

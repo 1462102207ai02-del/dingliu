@@ -111,11 +111,16 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.3
-          name: WechatDuo v1.1.3
+          tag_name: v1.1.4
+          name: WechatDuo v1.1.4
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.4**
+              - 首页非置顶会话：中间行也收内部 MainFrameItemView / 满宽背景图，灰缝可见
+              - 置顶横幅：装饰 MainFrameSectionFoldView（区头/浮动视图），不再只等 cell
+              - 通讯录：登记 NewContactsItemCell + ContactsItemView，内部铺满随单元格缩进
+              - 「我」页：挂 WCTableViewManager / MMTableViewInfo 的 willDisplayCell（真正的 table.delegate）
             - **v1.1.3**
               - 首页缩进生效：会话行不再因 MultiMenu 早退丢掉底板；列表改分组灰底，缝才能看见
               - 全局复用设置页卡片：分区灰底 + 双侧缩进 + 首尾圆角、中间行左右平直

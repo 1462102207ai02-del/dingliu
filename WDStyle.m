@@ -256,8 +256,20 @@ void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
     plate.fill.fillColor = WDCardFill().CGColor;
     [plate redraw];
 
-    WDStyleRoundCorners(view, 0, 0, continuous, tag);
-    view.layer.masksToBounds = NO;
+    WDStyleRoundCorners(view, radius, 15, continuous, tag);
+    view.clipsToBounds = YES;
+    view.layer.masksToBounds = YES;
+    for (UIView *s in view.subviews) {
+        if (s == plate) continue;
+        CGRect f = s.frame;
+        if (f.size.width < 8) continue;
+        if (f.origin.x < inx - 0.5 || f.size.width > plateF.size.width + 0.5) {
+            CGFloat y = f.origin.y;
+            CGFloat h = f.size.height;
+            if (h < 1) h = plateF.size.height;
+            s.frame = CGRectMake(plateF.origin.x, y, plateF.size.width, h);
+        }
+    }
 }
 
 static NSUInteger WDSectionCorners(UITableViewCell *cell) {
@@ -335,10 +347,61 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
     if ([cell respondsToSelector:@selector(setSeparatorInset:)]) {
         cell.separatorInset = UIEdgeInsetsMake(0, 16 + inx, 0, inx);
     }
-    WDApplyInset(cell, plateF);
+    cell.preservesSuperviewLayoutMargins = NO;
+    cell.contentView.preservesSuperviewLayoutMargins = NO;
+    cell.layoutMargins = UIEdgeInsetsMake(0, inx, 0, inx);
+
+    // MultiMenu 滑动菜单靠 contentView.frame，不能改它；标准单元格（我/发现）可以缩 contentView。
+    Class multiCls = objc_getClass("MMMultiMenuTableViewCell");
+    BOOL multi = multiCls && [cell isKindOfClass:multiCls];
+    if (!multi) WDApplyInset(cell, plateF);
+
     cell.contentView.backgroundColor = [UIColor clearColor];
     WDStyleRoundCorners(cell.contentView, radius, corners, continuous, tag);
-    cell.contentView.clipsToBounds = (corners != 0);
+    cell.contentView.clipsToBounds = YES;
+    cell.clipsToBounds = NO;
+
+    // 首页/通讯录真正铺满的是内部 ItemView，不是 contentView。中间行 corners=0，
+    // 若不把这些子视图收进 plateF，白底会盖住左右灰缝，看起来就像没缩进。
+    NSArray *layers = @[cell.subviews, cell.contentView.subviews];
+    for (NSUInteger li = 0; li < layers.count; li++) {
+        NSArray *list = layers[li];
+        BOOL inContent = (li == 1);
+        // contentView 若仍是满宽（MultiMenu / 被微信 layout 改回去），内部铺满视图必须收到 plate。
+        CGRect dest = plateF;
+        if (inContent) {
+            BOOL cvInset = (cell.contentView.frame.origin.x >= inx - 0.5 && inx > 0.5);
+            if (cvInset) dest = cell.contentView.bounds;
+            else dest = CGRectMake(inx, 0, plateF.size.width, cell.contentView.bounds.size.height);
+        }
+        for (UIView *s in list) {
+            if (s == cell.backgroundView || s == cell.contentView || s == cell.selectedBackgroundView) continue;
+            const char *nm = class_getName(object_getClass(s));
+            BOOL named = nm && (strstr(nm, "MainFrameItemView") ||
+                                strstr(nm, "ContactsItemView") ||
+                                strstr(nm, "subContent"));
+            CGRect f = s.frame;
+            BOOL wide = (f.origin.x < 1.0 && f.size.width >= bounds.size.width - 2.0 &&
+                         f.size.height >= bounds.size.height - 8.0);
+            if (named || (wide && ![s isKindOfClass:[UIControl class]])) {
+                if ([s isKindOfClass:[UIImageView class]]) {
+                    s.backgroundColor = [UIColor clearColor];
+                    ((UIImageView *)s).image = nil;
+                    continue;
+                }
+                s.frame = dest;
+                s.backgroundColor = [UIColor clearColor];
+                WDStyleRoundCorners(s, radius, corners, continuous, tag);
+                s.clipsToBounds = YES;
+                continue;
+            }
+            if ([s isKindOfClass:[UIImageView class]] &&
+                f.origin.x < 1.0 && f.size.width >= bounds.size.width - 2.0) {
+                s.backgroundColor = [UIColor clearColor];
+                ((UIImageView *)s).image = nil;
+            }
+        }
+    }
     if (cell.selectedBackgroundView) {
         cell.selectedBackgroundView.frame = plateF;
         WDStyleRoundCorners(cell.selectedBackgroundView, radius, corners, continuous, tag);
