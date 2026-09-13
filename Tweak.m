@@ -215,16 +215,6 @@ static void DLClearColorIfSystemBackground(UIView *v) {
 
 static BOOL gInBgOverride = NO;
 
-static void DLApplyHomeColors(UIView *v) {
-    NSString *pair = DLStr(kHomeColors);
-    if (!pair.length) return;
-    UIColor *dyn = DLDynamicColor(pair);
-    if (!dyn) return;
-    gInBgOverride = YES;
-    v.backgroundColor = dyn;
-    gInBgOverride = NO;
-}
-
 // ------------------------------------------------------------
 // MARK: - 通用 hook 实现
 // ------------------------------------------------------------
