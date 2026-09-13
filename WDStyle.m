@@ -159,7 +159,9 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
 
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
-    CGRect plateF = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(1.5, inx, 1.5, inx));
+    // 上下留缝，每行是独立四角卡片，不是连成一整条
+    CGRect plateF = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(3.0, inx, 3.0, inx));
+    if (plateF.size.width < 24 || plateF.size.height < 4) return;
 
     if (!objc_getAssociatedObject(cell, kWDOrigBgKey)) {
         UIView *orig = cell.backgroundView;
@@ -176,18 +178,22 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
         cell.backgroundColor = [UIColor clearColor];
     }
     if (!CGRectEqualToRect(plate.frame, plateF)) plate.frame = plateF;
+    plate.corners = 15;
     if (fabs(plate.radius - radius) > 0.25) {
         plate.radius = radius;
         [plate redraw];
     }
-    // contentView 同样缩进并圆角 → 内容与卡片一体
+    cell.opaque = NO;
+    if ([cell respondsToSelector:@selector(setSeparatorInset:)]) {
+        cell.separatorInset = UIEdgeInsetsMake(0, bounds.size.width, 0, 0);
+    }
+    // contentView 同样缩进并四角圆 → 整片卡片。不写 cell.frame。
+    WDApplyInset(cell, plateF);
     WDStyleRound(cell.contentView, radius, continuous, tag);
-    if (inx > 0) WDApplyInset(cell, plateF);
-    if (cell.selectedBackgroundView && inx > 0) {
-        CGRect sf = cell.selectedBackgroundView.frame;
-        if (fabs(sf.size.width - plateF.size.width) > 0.5) {
-            cell.selectedBackgroundView.frame = plateF;
-        }
+    cell.contentView.clipsToBounds = YES;
+    if (cell.selectedBackgroundView) {
+        cell.selectedBackgroundView.frame = plateF;
+        WDStyleRound(cell.selectedBackgroundView, radius, continuous, tag);
     }
 }
 

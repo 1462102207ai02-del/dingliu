@@ -160,6 +160,58 @@ NSString *WDHexForColor(UIColor *c) {
     [self ping];
 }
 
+- (void)disableAllEnabled {
+    int n = WDCatalogCount();
+    const WDItem *items = WDCatalogItems();
+    for (int i = 0; i < n; i++) {
+        [_ud setBool:NO forKey:WDOnKey(@(items[i].cls))];
+    }
+    [self ping];
+}
+
+- (void)restoreCustomValues {
+    NSDictionary *d = [_ud dictionaryRepresentation];
+    for (NSString *k in d) {
+        if ([k hasPrefix:@"WD.r."] || [k hasPrefix:@"WD.i."]) {
+            [_ud removeObjectForKey:k];
+        }
+    }
+    [_ud removeObjectForKey:@"WD.globalRadius"];
+    [_ud removeObjectForKey:@"WD.globalInset"];
+    [_ud setDouble:14.0 forKey:@"WD.globalRadius"];
+    [_ud setDouble:12.0 forKey:@"WD.globalInset"];
+    [self ping];
+}
+
+- (NSDictionary *)exportDictionary {
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    NSDictionary *d = [_ud dictionaryRepresentation];
+    for (NSString *k in d) {
+        if ([k hasPrefix:@"WD."]) out[k] = d[k];
+    }
+    out[@"WD.exportVersion"] = WD_VERSION;
+    out[@"WD.exportName"] = WD_DISPLAY_NAME;
+    return out;
+}
+
+- (BOOL)importDictionary:(NSDictionary *)dict {
+    if (![dict isKindOfClass:[NSDictionary class]] || dict.count == 0) return NO;
+    NSInteger n = 0;
+    for (NSString *k in dict) {
+        if (![k isKindOfClass:[NSString class]]) continue;
+        if (![k hasPrefix:@"WD."]) continue;
+        if ([k isEqualToString:@"WD.exportVersion"] || [k isEqualToString:@"WD.exportName"]) continue;
+        id v = dict[k];
+        if (v) {
+            [_ud setObject:v forKey:k];
+            n++;
+        }
+    }
+    if (n == 0) return NO;
+    [self ping];
+    return YES;
+}
+
 #pragma mark - 页面背景色
 
 - (BOOL)bgEnabledForPage:(int)page {

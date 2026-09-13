@@ -28,6 +28,10 @@ NSString *WDHexForColor(UIColor *c);
 - (BOOL)hasCustomInset:(NSString *)name;
 - (void)resetClass:(NSString *)name;
 - (void)resetAll;
+- (void)disableAllEnabled;
+- (void)restoreCustomValues;
+- (NSDictionary *)exportDictionary;
+- (BOOL)importDictionary:(NSDictionary *)dict;
 - (void)reload;
 - (void)ping;
 

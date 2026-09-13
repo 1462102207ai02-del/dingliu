@@ -90,16 +90,27 @@
 
 @implementation WDListController
 
+- (instancetype)init {
+    return [self initWithStyle:UITableViewStyleGrouped];
+}
+- (instancetype)initWithStyle:(UITableViewStyle)style {
+    (void)style;
+    if (@available(iOS 13.0, *)) {
+        self = [super initWithStyle:UITableViewStyleInsetGrouped];
+    } else {
+        self = [super initWithStyle:UITableViewStyleGrouped];
+    }
+    return self;
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.tableView.rowHeight = 52;
-    self.tableView.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
     if (@available(iOS 13.0, *)) {
         self.tableView.backgroundColor = [UIColor systemGroupedBackgroundColor];
     } else {
         self.tableView.backgroundColor = [UIColor groupTableViewBackgroundColor];
     }
-    self.tableView.separatorInset = UIEdgeInsetsMake(0, 28, 0, 28);
 }
 
 - (WDCell *)wdCell:(UITableView *)tv ident:(NSString *)rid style:(UITableViewCellStyle)st {
@@ -121,17 +132,25 @@
 }
 
 - (UITextField *)wdNumber:(WDCell *)c value:(NSString *)v placeholder:(NSString *)ph tag:(NSInteger)tag {
-    UITextField *f = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, 88, 30)];
+    UITextField *f = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, 48, 28)];
     f.borderStyle = UITextBorderStyleRoundedRect;
-    f.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+    f.keyboardType = UIKeyboardTypeNumberPad;
     f.returnKeyType = UIReturnKeyDone;
     f.textAlignment = NSTextAlignmentCenter;
-    f.font = [UIFont systemFontOfSize:15];
+    f.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightRegular];
     f.text = v ?: @"";
     f.placeholder = ph ?: @"";
     f.tag = tag;
     f.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
-    f.clearButtonMode = UITextFieldViewModeWhileEditing;
+    f.clearButtonMode = UITextFieldViewModeNever;
+    f.inputAccessoryView = ({
+        UIToolbar *tb = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+        tb.items = @[
+            [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil],
+            [[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:f action:@selector(resignFirstResponder)]
+        ];
+        tb;
+    });
     [f addTarget:self action:@selector(wdNumberDone:) forControlEvents:UIControlEventEditingDidEnd];
     [f addTarget:self action:@selector(wdNumberDone:) forControlEvents:UIControlEventEditingDidEndOnExit];
     [c.contentView addSubview:f];
@@ -141,9 +160,9 @@
 }
 
 - (UIView *)wdDot:(WDCell *)c color:(UIColor *)color {
-    UIView *d = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 26, 26)];
+    UIView *d = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 28, 18)];
     d.backgroundColor = color ?: [UIColor clearColor];
-    d.layer.cornerRadius = 13;
+    d.layer.cornerRadius = 4;
     d.layer.masksToBounds = YES;
     if (@available(iOS 13.0, *)) {
         d.layer.borderColor = [UIColor separatorColor].CGColor;
@@ -162,14 +181,11 @@
 }
 
 - (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)ip {
-    NSInteger rows = [tv numberOfRowsInSection:ip.section];
-    NSUInteger corners = 0;
-    if (rows <= 1) corners = 15;
-    else if (ip.row == 0) corners = (kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
-    else if (ip.row == rows - 1) corners = (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner);
+    (void)tv; (void)ip;
+    // InsetGrouped 已经给出页级缩进和分区卡片。按钮行也要独立四角，再叠一层底板。
     WDPrefs *p = [WDPrefs shared];
-    CGFloat r = MIN(p.globalRadius, 14);
-    WDStyleSettingsCell(cell, p.globalInset, r, corners, p.continuous);
+    CGFloat r = MIN(p.globalRadius > 0 ? p.globalRadius : 14, 14);
+    WDStyleSettingsCell(cell, 0, r, 15, p.continuous);
 }
 
 @end
@@ -330,7 +346,7 @@
     [tv deselectRowAtIndexPath:ip animated:YES];
     if (![WDPrefs shared].master) return;
     NSArray *idxs = WDCatalogIndexesForPage(self.page);
-    WDClassDetailController *d = [[WDClassDetailController alloc] initWithStyle:UITableViewStyleGrouped];
+    WDClassDetailController *d = [[WDClassDetailController alloc] init];
     d.idx = [idxs[(NSUInteger)ip.row] intValue];
     [self.navigationController pushViewController:d animated:YES];
 }
@@ -479,21 +495,21 @@
     if (s == 0) return 4;
     if (s == 1) return 4;                 // 四个 Tab 背景色
     if (s == 2) return (NSInteger)WDPageCount;
-    return 1;
+    return 5;
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
     if (s == 0) return @"全局";
     if (s == 1) return @"页面背景色";
     if (s == 2) return @"按页面分类设置";
-    return nil;
+    return @"管理";
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
     if (s == 0) return [NSString stringWithFormat:@"%@ v%@  ·  微信 8.0.70+ / iOS 14+", WD_DISPLAY_NAME, WD_VERSION];
     if (s == 1) return @"微信首页四个板块的背景色，浅色 / 深色可分别自定义。";
     if (s == 2) return @"按微信页面顺序分类，点进去只看到该页的元素。";
-    return @"";
+    return @"导出为 plist。恢复配置可从文件 App / 隔空投送选择外部 plist。";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -502,9 +518,19 @@
 
     if (ip.section == 3) {
         WDCell *c = [self wdCell:tv ident:@"r" style:UITableViewCellStyleDefault];
-        c.textLabel.text = @"全部恢复默认";
+        static NSString *titles[] = {
+            @"关闭所有已开启项",
+            @"还原所有自定义值",
+            @"导出插件配置",
+            @"恢复插件配置",
+            @"全部恢复默认"
+        };
+        NSInteger row = ip.row;
+        if (row < 0) row = 0;
+        if (row > 4) row = 4;
+        c.textLabel.text = titles[row];
         c.textLabel.textAlignment = NSTextAlignmentCenter;
-        c.textLabel.textColor = [UIColor systemRedColor];
+        c.textLabel.textColor = (row == 4) ? [UIColor systemRedColor] : [UIColor systemBlueColor];
         return c;
     }
 
@@ -562,23 +588,91 @@
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
-    if (![WDPrefs shared].master && ip.section != 0) return;
+    if (![WDPrefs shared].master && ip.section != 0 && ip.section != 3) return;
     if (ip.section == 1) {
-        WDColorController *v = [[WDColorController alloc] initWithStyle:UITableViewStyleGrouped];
+        WDColorController *v = [[WDColorController alloc] init];
         v.page = WDPageForTabIndex((int)ip.row);
         [self.navigationController pushViewController:v animated:YES];
         return;
     }
     if (ip.section == 2) {
-        WDClassListController *v = [[WDClassListController alloc] initWithStyle:UITableViewStyleGrouped];
+        WDClassListController *v = [[WDClassListController alloc] init];
         v.page = (int)ip.row;
         [self.navigationController pushViewController:v animated:YES];
         return;
     }
     if (ip.section == 3) {
-        [[WDPrefs shared] resetAll];
-        [tv reloadData];
+        switch (ip.row) {
+            case 0: [self confirmTitle:@"关闭所有已开启项" msg:@"所有类的开关都会关掉，圆角/缩进数值保留。" ok:@"关闭" run:^{
+                [[WDPrefs shared] disableAllEnabled];
+                [self.tableView reloadData];
+            }]; break;
+            case 1: [self confirmTitle:@"还原所有自定义值" msg:@"圆角和缩进回到默认，开关状态保留。" ok:@"还原" run:^{
+                [[WDPrefs shared] restoreCustomValues];
+                [self.tableView reloadData];
+            }]; break;
+            case 2: [self exportConfig]; break;
+            case 3: [self importConfig]; break;
+            case 4: [self confirmTitle:@"全部恢复默认" msg:@"开关、圆角、缩进全部回到出厂。" ok:@"恢复" run:^{
+                [[WDPrefs shared] resetAll];
+                [self.tableView reloadData];
+            }]; break;
+        }
     }
+}
+
+- (void)confirmTitle:(NSString *)title msg:(NSString *)msg ok:(NSString *)ok run:(void(^)(void))run {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:ok style:UIAlertActionStyleDestructive handler:^(UIAlertAction *_) { if (run) run(); }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+- (void)toast:(NSString *)msg {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:nil message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:a animated:YES completion:nil];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [a dismissViewControllerAnimated:YES completion:nil]; });
+}
+
+- (void)exportConfig {
+    NSDictionary *d = [[WDPrefs shared] exportDictionary];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"WechatDuo.plist"];
+    NSData *data = [NSPropertyListSerialization dataWithPropertyList:d
+                                                              format:NSPropertyListXMLFormat_v1_0
+                                                             options:0 error:nil];
+    if (!data || ![data writeToFile:path atomically:YES]) {
+        [self toast:@"导出失败"];
+        return;
+    }
+    NSURL *url = [NSURL fileURLWithPath:path];
+    UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil];
+    av.popoverPresentationController.sourceView = self.view;
+    [self presentViewController:av animated:YES completion:nil];
+}
+
+- (void)importConfig {
+    UIDocumentPickerViewController *p =
+        [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"com.apple.property-list", @"public.xml", @"public.data"]
+                                                              inMode:UIDocumentPickerModeImport];
+    p.delegate = self;
+    p.allowsMultipleSelection = NO;
+    [self presentViewController:p animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller;
+    NSURL *url = urls.firstObject;
+    if (!url) { [self toast:@"未选择文件"]; return; }
+    BOOL access = [url startAccessingSecurityScopedResource];
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    if (access) [url stopAccessingSecurityScopedResource];
+    if (!data) { [self toast:@"读不到这个文件"]; return; }
+    id obj = [NSPropertyListSerialization propertyListWithData:data options:0 format:NULL error:nil];
+    if (![obj isKindOfClass:[NSDictionary class]]) { [self toast:@"不是有效的 plist 字典"]; return; }
+    if (![[WDPrefs shared] importDictionary:obj]) { [self toast:@"没有可导入的 WD. 键"]; return; }
+    [self.tableView reloadData];
+    [self toast:@"已恢复配置"];
 }
 
 - (void)masterChanged:(UISwitch *)sw {
@@ -617,7 +711,7 @@ void WDPushSettings(void) {
         if (r) { top = r; if (w.isKeyWindow) break; }
     }
     if (!top) return;
-    WDSettingsController *s = [[WDSettingsController alloc] initWithStyle:UITableViewStyleGrouped];
+    WDSettingsController *s = [[WDSettingsController alloc] init];
     if (top.navigationController) {
         [top.navigationController pushViewController:s animated:YES];
     } else {

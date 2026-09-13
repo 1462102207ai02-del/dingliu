@@ -111,11 +111,16 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.0
-          name: WechatDuo v1.1.0
+          tag_name: v1.1.1
+          name: WechatDuo v1.1.1
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.1**
+              - 列表整片独立卡片：底板双侧缩进 + 四周圆角（不写 cell.frame）
+              - 设置页改 InsetGrouped，页面本身两边缩进 + 卡片圆角（含按钮）
+              - 两位数字输入框缩到 48pt，去掉滑块圆圈；颜色预览改为圆角色块
+              - 管理：关闭所有已开启项 / 还原所有自定义值 / 导出 plist / 恢复外部 plist / 全部恢复默认
             - **v1.1.0**
               - 设置项按页面顺序分类（首页/通讯录/发现/我/聊天/搜索/钱包/通用），不再一屏铺开上百项
               - 设置页自身卡片化 + 圆角 + 双侧缩进
