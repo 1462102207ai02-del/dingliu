@@ -108,12 +108,14 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.2
-          name: dingliu v1.0.2 (你啊爸支鼎溜)
+          tag_name: v1.0.3
+          name: dingliu v1.0.3 (你啊爸支鼎溜)
           body: |
             微信 8.0.70+ 圆角美化插件
+            - v1.0.3 (关键修复): Theos Linux 伪签名损坏导致 dyld 校验失败秒闪退 → CI 强制 ldid 重签 + 签名完整性校验；最低系统降到 iOS 14.0；新增启动日志（微信沙盒 Documents/dingliu.log）与崩溃兜底
+            - v1.0.2: 修复 hook 父子类自我递归栈溢出
             - v1.0.1: 接入「插件收纳」入口（MinimizeViewController -> WCPluginsMgr），过滤 4 个微信 bundle id
-            - `com.dingliu.wechat_1.0.2_iphoneos-arm64.deb` — rootless 越狱（Dopamine/palera1n rootless）安装包
+            - `com.dingliu.wechat_1.0.3_iphoneos-arm64.deb` — rootless 越狱（Dopamine/palera1n rootless）安装包
             - `dingliu.dylib` / `dingliu-trollfools-dylib.zip` — TrollFools 注入用
           files: |
             dist/*.deb

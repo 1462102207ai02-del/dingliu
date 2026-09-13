@@ -38,7 +38,7 @@ static NSString * const kFullWidth       = @"DLFullWidthCells";      // 单元�
 static NSString * const kCleanBorders    = @"DLCleanSystemBorders";  // 清除系统自带描边
 
 static NSString * const kDisplayName     = @"你啊爸支鼎溜";
-static NSString * const kVersionString    = @"1.0.2";
+static NSString * const kVersionString    = @"1.0.3";
 
 // hook kind
 enum {
@@ -868,12 +868,13 @@ static void DLRegisterDefaults(void) {
 __attribute__((constructor))
 static void dingliu_init(void) {
     @autoreleasepool {
+        DLInstallCrashGuards();
         DLRegisterDefaults();
 
         @try {
             if (DLOn(@"DLSafeMode", NO)) {
                 // 安全模式：跳过所有外观 hook，只装设置入口，便于救砖
-                NSLog(@"[dingliu] SAFE MODE: cosmetic hooks skipped");
+                DLLog(@"SAFE MODE: cosmetic hooks skipped");
             } else {
                 // 数据驱动 hook 表
                 IMP impTable[6] = {
@@ -908,6 +909,7 @@ static void dingliu_init(void) {
                 if (layerCls) DLSwizzle(layerCls, @selector(setBorderWidth:), (IMP)DLLayerBorderIMP);
 
                 NSLog(@"[dingliu] 你啊爸支鼎溜 loaded");
+                DLLog(@"cosmetic hooks done");
             }
 
             // 设置入口（安全模式下也保留，方便关闭插件）
