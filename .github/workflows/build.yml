@@ -102,9 +102,10 @@ jobs:
             # 关键修复：Theos 在 Linux 产出的伪签名 LC_CODE_SIGNATURE 是坏的
             #（偏移/大小为乱码），dyld 强加载校验签名失败 → 秒闪退无日志。
             # 必须去签 + 重签 + 程序化校验。
-            # ldid 对已损坏的签名槽位会静默放弃/断言失败，必须先摘除坏 LC 再从零签名
-            python3 tools/strip_sig.py .theos/obj/dingliu.dylib
-            ldid -S .theos/obj/dingliu.dylib
+            # 关键修复：Theos/ldid 对此类文件产出的伪签名 LC_CODE_SIGNATURE 是坏的
+            #（偏移/大小为乱码，ldid 重签只追加 blob 不写 LC），dyld 强加载校验
+            # 签名失败 → 秒闪退无日志。改用自研 adhoc 签名器全程可控。
+            python3 tools/adhoc_sign.py dingliu .theos/obj/dingliu.dylib
             python3 tools/verify_sig.py .theos/obj/dingliu.dylib
             # 用重签后的 dylib 重建 deb（包内 dylib 同样有效，并重算 md5sums）
             rm -rf /tmp/debx && mkdir -p /tmp/debx
