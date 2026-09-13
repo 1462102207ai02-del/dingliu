@@ -16,49 +16,57 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install packaging tools
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip
+        run: |
+          set -o pipefail
+          sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip ldid 2>&1 | tee /tmp/logs/apt.log || true
+          which ldid || echo "no apt ldid"
 
       - name: Install Theos & SDK
         run: |
-          set -e
-          export THEOS=$HOME/theos
-          clone_theos() {
-            git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS
-          }
-          clone_sdks() {
-            git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
-          }
-          for i in 1 2 3; do
-            if [ -d $THEOS/.git ]; then break; fi
-            rm -rf $THEOS && clone_theos && break || { echo "theos clone attempt $i failed, retrying"; rm -rf $THEOS; sleep 5; }
-          done
-          [ -d $THEOS/.git ] || { echo "::error::theos clone failed after retries"; exit 1; }
-          for i in 1 2 3; do
-            if [ -d $THEOS/sdks/.git ]; then break; fi
-            rm -rf $THEOS/sdks && clone_sdks && break || { echo "sdks clone attempt $i failed, retrying"; rm -rf $THEOS/sdks; sleep 5; }
-          done
-          [ -d $THEOS/sdks/.git ] || { echo "::error::sdks clone failed after retries"; exit 1; }
-          git -C $THEOS submodule update --init --recursive || true
-          ls $THEOS/sdks/ | head
-          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          set -o pipefail
+          {
+            set -e
+            export THEOS=$HOME/theos
+            for i in 1 2 3; do
+              if [ -d $THEOS/.git ]; then break; fi
+              rm -rf $THEOS && git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS && break || { echo "theos clone attempt $i failed"; rm -rf $THEOS; sleep 5; }
+            done
+            [ -d $THEOS/.git ] || { echo "::error::theos clone failed after retries"; exit 1; }
+            for i in 1 2 3; do
+              if [ -d $THEOS/sdks/.git ]; then break; fi
+              rm -rf $THEOS/sdks && git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks && break || { echo "sdks clone attempt $i failed"; rm -rf $THEOS/sdks; sleep 5; }
+            done
+            [ -d $THEOS/sdks/.git ] || { echo "::error::sdks clone failed after retries"; exit 1; }
+            git -C $THEOS submodule update --init --recursive || true
+            ls $THEOS/sdks/ | head
+            echo "THEOS=$THEOS" >> $GITHUB_ENV
+          } 2>&1 | tee /tmp/logs/theos.log
 
-      - name: Install ldid
+      - name: Ensure ldid
         run: |
-          for i in 1 2 3; do
-            curl -sL --retry 3 -o /tmp/ldid \
-              https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 && break || sleep 5
-          done
-          ls -la /tmp/ldid
-          file /tmp/ldid || true
-          sudo install -m 755 /tmp/ldid /usr/local/bin/ldid
-          ldid -V
+          set -o pipefail
+          {
+            if ! which ldid; then
+              for i in 1 2 3; do
+                curl -fL --retry 3 -o /tmp/ldid_bin https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64 && break
+                echo "curl attempt $i failed"; sleep 5
+              done
+              [ -f /tmp/ldid_bin ] || { echo "::error::ldid download failed"; exit 1; }
+              sudo install -m 755 /tmp/ldid_bin /usr/local/bin/ldid
+            fi
+            which ldid
+            ldid -V || true
+          } 2>&1 | tee /tmp/logs/ldid.log
 
       - name: Build (rootless)
         run: |
-          cd $GITHUB_WORKSPACE
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
-          ls -la packages/ || true
-          ls -la .theos/obj/ || true
+          set -o pipefail
+          {
+            cd $GITHUB_WORKSPACE
+            make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+            ls -la packages/ || true
+            ls -la .theos/obj/ || true
+          } 2>&1 | tee /tmp/logs/build.log
 
       - name: Collect artifacts
         run: |
@@ -67,7 +75,7 @@ jobs:
           cp .theos/obj/dingliu.dylib dist/dingliu.dylib 2>/dev/null || \
             cp .theos/obj/debug/dingliu.dylib dist/dingliu.dylib 2>/dev/null || true
           cd dist && zip -r dingliu-trollfools-dylib.zip dingliu.dylib && cd ..
-          ls -la dist/
+          ls -la dist/ 2>&1 | tee /tmp/logs/collect.log
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -90,3 +98,14 @@ jobs:
             dist/*.zip
             dist/dingliu.dylib
           fail_on_unmatched_files: false
+
+      - name: Upload failure logs to Release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/logs
+          tag="ci-logs-${{ github.run_id }}"
+          gh release create "$tag" --title "$tag" --notes "CI failure logs (auto)" 2>/dev/null || true
+          gh release upload "$tag" /tmp/logs/* --clobber || echo "log upload failed"
+          gh release view "$tag" --json assets 2>/dev/null || true
