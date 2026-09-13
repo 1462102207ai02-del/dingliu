@@ -18,7 +18,7 @@
 - (void)wdNumberDone:(UITextField *)f;
 @end
 
-@interface WDSettingsController : WDListController <UIDocumentPickerDelegate>
+@interface WDSettingsController : WDListController <UIDocumentPickerDelegate, UIColorPickerViewControllerDelegate>
 @end
 
 void WDPushSettings(void);

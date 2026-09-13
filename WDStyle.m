@@ -10,6 +10,7 @@ static const void *kWDOrigCornersKey = &kWDOrigCornersKey;
 static const void *kWDOrigBgKey      = &kWDOrigBgKey;
 static const void *kWDOrigBgColorKey = &kWDOrigBgColorKey;
 static const void *kWDInsetKey       = &kWDInsetKey;
+static const void *kWDTableBgKey     = &kWDTableBgKey;
 
 #define WD_ASSOC OBJC_ASSOCIATION_RETAIN_NONATOMIC
 
@@ -159,6 +160,16 @@ void WDStyleRoundCorners(UIView *view, CGFloat radius, NSUInteger corners, BOOL 
 
 #pragma mark - 单元格（整段卡片：左右缩进，中间行左右平直）
 
+static UIColor *WDGroupedFill(void) {
+    if (@available(iOS 13.0, *)) return [UIColor systemGroupedBackgroundColor];
+    return [UIColor groupTableViewBackgroundColor];
+}
+
+static UIColor *WDCardFill(void) {
+    if (@available(iOS 13.0, *)) return [UIColor secondarySystemGroupedBackgroundColor];
+    return [UIColor whiteColor];
+}
+
 static void WDApplyInset(UITableViewCell *cell, CGRect target) {
     UIView *cv = cell.contentView;
     CGRect cur = cv.frame;
@@ -168,6 +179,85 @@ static void WDApplyInset(UITableViewCell *cell, CGRect target) {
         fabs(cur.size.height - target.size.height) < 0.5) return;
     objc_setAssociatedObject(cell, kWDInsetKey, @YES, WD_ASSOC);
     cv.frame = target;
+}
+
+static void WDPaintGroupedHost(UIView *view) {
+    if (!view) return;
+    UIView *sv = view.superview;
+    while (sv) {
+        if ([sv isKindOfClass:[UITableView class]] || [sv isKindOfClass:[UIScrollView class]]) break;
+        if (!sv.superview) break;
+        sv = sv.superview;
+    }
+    if (!sv) sv = view.superview;
+    if (!sv) return;
+    if (!objc_getAssociatedObject(sv, kWDTableBgKey)) {
+        objc_setAssociatedObject(sv, kWDTableBgKey, sv.backgroundColor ?: (id)[NSNull null], WD_ASSOC);
+    }
+    UIColor *fill = WDGroupedFill();
+    sv.backgroundColor = fill;
+    sv.opaque = YES;
+    if ([sv isKindOfClass:[UITableView class]]) {
+        UITableView *tv = (UITableView *)sv;
+        if (tv.backgroundView) tv.backgroundView.backgroundColor = fill;
+    }
+}
+
+void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
+    if (!view) return;
+    if ([view isKindOfClass:[UITableViewCell class]]) {
+        WDStyleCell((UITableViewCell *)view, inset, radius, continuous, tag);
+        return;
+    }
+    CGRect bounds = view.bounds;
+    if (bounds.size.width < 24 || bounds.size.height < 8) {
+        WDStyleRound(view, radius, continuous, tag);
+        return;
+    }
+    CGFloat inx = MAX(0, inset);
+    if (inx > 0 && bounds.size.width <= inx * 2 + 24) inx = 0;
+    if (inx <= 0.5) {
+        WDStyleRound(view, radius, continuous, tag);
+        return;
+    }
+
+    WDStoreOrig(view);
+    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+    WDPaintGroupedHost(view);
+
+    if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
+        UIColor *oc = view.backgroundColor;
+        objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
+    }
+    view.backgroundColor = [UIColor clearColor];
+    view.opaque = NO;
+    view.clipsToBounds = NO;
+
+    CGRect plateF = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(0, inx, 0, inx));
+    if (plateF.size.width < 24 || plateF.size.height < 4) {
+        WDStyleRound(view, radius, continuous, tag);
+        return;
+    }
+
+    WDCardPlate *plate = objc_getAssociatedObject(view, kWDPlateKey);
+    if (![plate isKindOfClass:[WDCardPlate class]]) {
+        plate = [[WDCardPlate alloc] initWithFrame:plateF];
+        plate.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        objc_setAssociatedObject(view, kWDPlateKey, plate, WD_ASSOC);
+        [view insertSubview:plate atIndex:0];
+    } else if (plate.superview != view) {
+        [view insertSubview:plate atIndex:0];
+    } else if (view.subviews.firstObject != plate) {
+        [view sendSubviewToBack:plate];
+    }
+    plate.frame = plateF;
+    plate.radius = radius;
+    plate.corners = 15;
+    plate.fill.fillColor = WDCardFill().CGColor;
+    [plate redraw];
+
+    WDStyleRoundCorners(view, 0, 0, continuous, tag);
+    view.layer.masksToBounds = NO;
 }
 
 static NSUInteger WDSectionCorners(UITableViewCell *cell) {
@@ -193,16 +283,6 @@ static NSUInteger WDSectionCorners(UITableViewCell *cell) {
 
 void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!cell) return;
-    // 滑动菜单 cell：只圆角 contentView，不换 backgroundView、不 clip 自身，避免挡侧滑
-    static Class kMultiMenu = Nil;
-    static dispatch_once_t onceMM;
-    dispatch_once(&onceMM, ^{ kMultiMenu = objc_getClass("MMMultiMenuTableViewCell"); });
-    const char *cn = object_getClassName(cell);
-    if ((kMultiMenu && [cell isKindOfClass:kMultiMenu]) || (cn && strstr(cn, "MultiMenu"))) {
-        WDStyleRound(cell.contentView, radius, continuous, tag);
-        return;
-    }
-
     CGRect bounds = cell.bounds;
     if (bounds.size.width < 32 || bounds.size.height < 8) return;
 
@@ -210,10 +290,22 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
 
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
-    // 整段卡片：左右缩进，中间行左右平直，只有首尾四角。
     NSUInteger corners = WDSectionCorners(cell);
     CGRect plateF = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(0, inx, 0, inx));
     if (plateF.size.width < 24 || plateF.size.height < 4) return;
+
+    UIView *sv = cell.superview;
+    while (sv && ![sv isKindOfClass:[UITableView class]]) sv = sv.superview;
+    if ([sv isKindOfClass:[UITableView class]]) {
+        UITableView *tv = (UITableView *)sv;
+        if (!objc_getAssociatedObject(tv, kWDTableBgKey)) {
+            objc_setAssociatedObject(tv, kWDTableBgKey, tv.backgroundColor ?: (id)[NSNull null], WD_ASSOC);
+        }
+        UIColor *fill = WDGroupedFill();
+        tv.backgroundColor = fill;
+        tv.opaque = YES;
+        if (tv.backgroundView) tv.backgroundView.backgroundColor = fill;
+    }
 
     if (!objc_getAssociatedObject(cell, kWDOrigBgKey)) {
         UIView *orig = cell.backgroundView;
@@ -227,7 +319,6 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
         plate = [[WDCardPlate alloc] initWithFrame:plateF];
         objc_setAssociatedObject(cell, kWDPlateKey, plate, WD_ASSOC);
         cell.backgroundView = plate;
-        cell.backgroundColor = [UIColor clearColor];
     }
     BOOL changed = !CGRectEqualToRect(plate.frame, plateF) ||
                    fabs(plate.radius - radius) > 0.25 ||
@@ -235,13 +326,17 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
     plate.frame = plateF;
     plate.radius = radius;
     plate.corners = corners;
+    plate.fill.fillColor = WDCardFill().CGColor;
     if (changed) [plate redraw];
+
+    // 单元格本体透明，左右露分组灰底，看起来才是「缩进」。不写 cell.frame。
+    cell.backgroundColor = [UIColor clearColor];
     cell.opaque = NO;
     if ([cell respondsToSelector:@selector(setSeparatorInset:)]) {
         cell.separatorInset = UIEdgeInsetsMake(0, 16 + inx, 0, inx);
     }
-    // contentView 同样缩进。中间行不圆角，左右是平的。不写 cell.frame。
     WDApplyInset(cell, plateF);
+    cell.contentView.backgroundColor = [UIColor clearColor];
     WDStyleRoundCorners(cell.contentView, radius, corners, continuous, tag);
     cell.contentView.clipsToBounds = (corners != 0);
     if (cell.selectedBackgroundView) {
@@ -315,6 +410,37 @@ void WDStyleRevertView(UIView *view) {
             objc_setAssociatedObject(cell, kWDInsetKey, nil, WD_ASSOC);
         }
         WDRevertRound(cell.contentView);
+        UIView *sv = cell.superview;
+        while (sv && ![sv isKindOfClass:[UITableView class]]) sv = sv.superview;
+        if ([sv isKindOfClass:[UITableView class]]) {
+            id ob = objc_getAssociatedObject(sv, kWDTableBgKey);
+            if (ob) {
+                sv.backgroundColor = [ob isKindOfClass:[UIColor class]] ? (UIColor *)ob : nil;
+                objc_setAssociatedObject(sv, kWDTableBgKey, nil, WD_ASSOC);
+            }
+        }
+    } else {
+        id plate = objc_getAssociatedObject(view, kWDPlateKey);
+        if ([plate isKindOfClass:[UIView class]]) {
+            [(UIView *)plate removeFromSuperview];
+            objc_setAssociatedObject(view, kWDPlateKey, nil, WD_ASSOC);
+        }
+        id obc = objc_getAssociatedObject(view, kWDOrigBgColorKey);
+        if (obc) {
+            view.backgroundColor = [obc isKindOfClass:[UIColor class]] ? (UIColor *)obc : nil;
+            objc_setAssociatedObject(view, kWDOrigBgColorKey, nil, WD_ASSOC);
+        }
+        UIView *sv = view.superview;
+        while (sv && ![sv isKindOfClass:[UITableView class]] && ![sv isKindOfClass:[UIScrollView class]]) {
+            sv = sv.superview;
+        }
+        if (sv) {
+            id ob = objc_getAssociatedObject(sv, kWDTableBgKey);
+            if (ob) {
+                sv.backgroundColor = [ob isKindOfClass:[UIColor class]] ? (UIColor *)ob : nil;
+                objc_setAssociatedObject(sv, kWDTableBgKey, nil, WD_ASSOC);
+            }
+        }
     }
     WDRevertRound(view);
     objc_setAssociatedObject(view, kWDTagKey, nil, WD_ASSOC);

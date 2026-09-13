@@ -1,6 +1,11 @@
 // WechatDuo — 微信全页面卡片化
 // TrollFools 裸 dylib：纯 ObjC runtime，不链 Substrate。
 //
+// v1.1.3
+//   首页会话行是 MMMultiMenuTableViewCell 子类：禁止再对 MultiMenu 早退。
+//   列表灰底 + 分区卡片底板，才能看见双侧缩进（白底上看不见缝）。
+//   未登记的单元格沿父类命中 MMTableViewCell；再用 willDisplayCell 兜底。
+//
 // v1.1.0
 //   1) 挂载策略：沿父类链找到「真正实现 layoutSubviews」的那个类再替换 IMP。
 //      旧版只在本类实现了才挂，导致首页会话列表（NewMainFrameCell 自己没有
@@ -160,8 +165,15 @@ static int WDIdxForClass(Class c) {
     NSUInteger h = ((NSUInteger)c >> 4) & 7u;
     if (gCacheCls[h] == c) return gCacheIdx[h];
     int found = -1;
-    for (int i = 0; i < gClsN; i++) {
-        if (gCls[i].cls == c) { found = gCls[i].idx; break; }
+    for (Class k = c; k && found < 0; k = class_getSuperclass(k)) {
+        const char *nm = class_getName(k);
+        if (!nm) break;
+        if (k != c && WDHardSkip(nm)) break;
+        for (int i = 0; i < gClsN; i++) {
+            if (gCls[i].cls == k) { found = gCls[i].idx; break; }
+        }
+        if (nm[0] == 'U' && nm[1] == 'I') break;
+        if (strcmp(nm, "NSObject") == 0) break;
     }
     gCacheCls[h] = c;
     gCacheIdx[h] = found;
@@ -202,8 +214,16 @@ static void WDDecorate(id self, int idx) {
     if (!gSnap[idx].on) return;
     if (![self isKindOfClass:[UIView class]]) return;
     UIView *v = (UIView *)self;
-    if (gSnap[idx].kind == WDKindCell && [v isKindOfClass:[UITableViewCell class]]) {
+    if ([v isKindOfClass:[UITableViewCell class]]) {
         WDStyleCell((UITableViewCell *)v, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
+        return;
+    }
+    if (gSnap[idx].kind == WDKindChrome) {
+        WDStyleRound(v, gSnap[idx].r, gContinuous, idx);
+        return;
+    }
+    if (gSnap[idx].i > 0.5f) {
+        WDStyleView(v, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
         return;
     }
     WDStyleRound(v, gSnap[idx].r, gContinuous, idx);
@@ -519,6 +539,66 @@ static void WDHookPlugin(void) {
     else class_addMethod(min, s, (IMP)WDMinVDL, method_getTypeEncoding(m));
 }
 
+#pragma mark - 列表 willDisplay 兜底
+
+static int gDefCellIdx = -2;
+
+static void WDDecorateCellIfNeeded(UITableViewCell *cell) {
+    if (!gLive || !gMaster || gSafe) return;
+    if (![cell isKindOfClass:[UITableViewCell class]]) return;
+    int idx = WDIdxForClass(object_getClass(cell));
+    if (idx < 0) {
+        if (gDefCellIdx == -2) gDefCellIdx = WDIndexOfClassName("MMTableViewCell");
+        idx = gDefCellIdx;
+    }
+    if (idx < 0 || idx >= 160) return;
+    if (!gSnap[idx].on) {
+        if (WDStyleTagOf(cell) >= 0) WDStyleRevertView(cell);
+        return;
+    }
+    WDDecorate(cell, idx);
+}
+
+static BOOL WDHookWillDisplay(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(tableView:willDisplayCell:forRowAtIndexPath:);
+    Method m = class_getInstanceMethod(cls, s);
+    IMP orig = m ? method_getImplementation(m) : NULL;
+    static Class hooked[16];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP stub = imp_implementationWithBlock(^(id slf, UITableView *tv, UITableViewCell *cell, NSIndexPath *ip) {
+        if (orig) ((void (*)(id, SEL, id, id, id))orig)(slf, s, tv, cell, ip);
+        if (![NSThread isMainThread]) return;
+        @try { WDDecorateCellIfNeeded(cell); } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) {
+        method_setImplementation(m, stub);
+        ok = YES;
+    } else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:@@@";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 16) hooked[hookedN++] = cls;
+    return ok;
+}
+
+static void WDInstallTableDisplay(void) {
+    static const char *kVCs[] = {
+        "NewMainFrameViewController",
+        "ContactsViewController",
+        "NewContactsViewController",
+        "FindFriendEntryViewController",
+        "MoreViewController",
+        "NewSettingViewController",
+        NULL
+    };
+    for (int i = 0; kVCs[i]; i++) WDHookWillDisplay(kVCs[i]);
+}
+
 #pragma mark - 安装
 
 static void WDInstallHooks(void) {
@@ -570,6 +650,7 @@ static void WDInstallOnce(void) {
                 return;
             }
             WDInstallHooks();
+            WDInstallTableDisplay();
             WDHookEntry("MoreViewController");
             WDHookEntry("NewSettingViewController");
             WDHookPlugin();
