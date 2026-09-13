@@ -22,7 +22,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip ldid 2>&1 | tee /tmp/logs/apt.log || true
           which ldid || echo "no apt ldid"
 
-      - name: Install Theos & SDK
+      - name: Install Theos, toolchain & SDK
         run: |
           set -o pipefail
           mkdir -p /tmp/logs
@@ -34,13 +34,24 @@ jobs:
               rm -rf $THEOS && git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS && break || { echo "theos clone attempt $i failed"; rm -rf $THEOS; sleep 5; }
             done
             [ -d $THEOS/.git ] || { echo "::error::theos clone failed after retries"; exit 1; }
-            for i in 1 2 3; do
-              if [ -d $THEOS/sdks/.git ]; then break; fi
-              rm -rf $THEOS/sdks && git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks && break || { echo "sdks clone attempt $i failed"; rm -rf $THEOS/sdks; sleep 5; }
-            done
-            [ -d $THEOS/sdks/.git ] || { echo "::error::sdks clone failed after retries"; exit 1; }
-            git -C $THEOS submodule update --init --recursive || true
+            sudo apt-get install -y libtinfo6 xz-utils || true
+            # iOS cross toolchain (official install-theos method, non-swift)
+            if [ ! -x $THEOS/toolchain/linux/iphone/bin/clang ]; then
+              mkdir -p $THEOS/toolchain
+              for i in 1 2 3; do
+                curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz -o /tmp/tc.tar.xz && break
+                echo "toolchain dl attempt $i failed"; sleep 5
+              done
+              ls -la /tmp/tc.tar.xz
+              tar -xJf /tmp/tc.tar.xz -C $THEOS/toolchain/
+            fi
+            [ -x $THEOS/toolchain/linux/iphone/bin/clang ] || { echo "::error::toolchain clang missing"; exit 1; }
+            # patched SDK (official install-sdk)
+            if ! ls $THEOS/sdks/ | grep -q sdk; then
+              $THEOS/bin/install-sdk latest
+            fi
             ls $THEOS/sdks/ | head
+            $THEOS/toolchain/linux/iphone/bin/clang --version | head -2
             echo "THEOS=$THEOS" >> $GITHUB_ENV
           } 2>&1 | tee /tmp/logs/theos.log
 
