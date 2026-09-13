@@ -602,21 +602,25 @@
         return;
     }
     if (ip.section == 3) {
-        switch (ip.row) {
-            case 0: [self confirmTitle:@"关闭所有已开启项" msg:@"所有类的开关都会关掉，圆角/缩进数值保留。" ok:@"关闭" run:^{
+        if (ip.row == 0) {
+            [self confirmTitle:@"关闭所有已开启项" msg:@"所有类的开关都会关掉，圆角/缩进数值保留。" ok:@"关闭" run:^{
                 [[WDPrefs shared] disableAllEnabled];
                 [self.tableView reloadData];
-            }]; break;
-            case 1: [self confirmTitle:@"还原所有自定义值" msg:@"圆角和缩进回到默认，开关状态保留。" ok:@"还原" run:^{
+            }];
+        } else if (ip.row == 1) {
+            [self confirmTitle:@"还原所有自定义值" msg:@"圆角和缩进回到默认，开关状态保留。" ok:@"还原" run:^{
                 [[WDPrefs shared] restoreCustomValues];
                 [self.tableView reloadData];
-            }]; break;
-            case 2: [self exportConfig]; break;
-            case 3: [self importConfig]; break;
-            case 4: [self confirmTitle:@"全部恢复默认" msg:@"开关、圆角、缩进全部回到出厂。" ok:@"恢复" run:^{
+            }];
+        } else if (ip.row == 2) {
+            [self exportConfig];
+        } else if (ip.row == 3) {
+            [self importConfig];
+        } else if (ip.row == 4) {
+            [self confirmTitle:@"全部恢复默认" msg:@"开关、圆角、缩进全部回到出厂。" ok:@"恢复" run:^{
                 [[WDPrefs shared] resetAll];
                 [self.tableView reloadData];
-            }]; break;
+            }];
         }
     }
 }
