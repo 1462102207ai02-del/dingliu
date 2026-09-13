@@ -13,6 +13,11 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <signal.h>
+#import <fcntl.h>
+#import <unistd.h>
+#import <string.h>
+#import <stdarg.h>
 
 // ------------------------------------------------------------
 // MARK: - 常量 / 偏好键
@@ -837,6 +842,73 @@ static void DLMinimizeViewDidLoadIMP(id self, SEL _cmd) {
             // 防止因微信版本变动导致闪退
         }
     }
+}
+
+// ------------------------------------------------------------
+// MARK: - 启动日志 / 崩溃兜底
+// 日志写入微信沙盒 Documents/dingliu.log，两处用途：
+//   1. 任何环境（rootless / TrollFools）下都能确认插件加载进度；
+//   2. 若仍闪退，能拿到崩溃前的最后一步与异常信息。
+// ------------------------------------------------------------
+
+static char gDLLogPathC[512];   // async-signal-safe 用的 C 路径缓存
+
+static NSString *DLCrashLogPath(void) {
+    static NSString *p = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        if (!docs) docs = NSHomeDirectory();
+        p = [docs stringByAppendingPathComponent:@"dingliu.log"];
+        strncpy(gDLLogPathC, p.fileSystemRepresentation, sizeof(gDLLogPathC) - 1);
+    });
+    return p;
+}
+
+// 信号安全版追加写（signal handler 内使用）
+static void DLAppendLogRaw(const char *msg) {
+    if (!gDLLogPathC[0]) return;
+    int fd = open(gDLLogPathC, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return;
+    write(fd, msg, strlen(msg));
+    close(fd);
+}
+
+static void DLLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1,2);
+static void DLLog(NSString *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    NSString *s = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+    NSString *line = [NSString stringWithFormat:@"[dingliu v%@] %@\n", kVersionString, s];
+    NSLog(@"%@", line);
+    DLAppendLogRaw(line.UTF8String);
+}
+
+static void DLUncaughtExceptionHandler(NSException *e) {
+    DLLog(@"UNCAUGHT EXCEPTION: %@ — %@\n%@", e.name, e.reason, e.callStackSymbols);
+}
+
+static void DLCrashSignalHandler(int sig) {
+    const char *n = sig == SIGABRT ? "SIGABRT" : sig == SIGSEGV ? "SIGSEGV"
+                  : sig == SIGBUS  ? "SIGBUS"  : sig == SIGILL  ? "SIGILL"
+                  : sig == SIGTRAP ? "SIGTRAP" : "SIGNAL";
+    char buf[96];
+    snprintf(buf, sizeof(buf), "[dingliu] CRASH SIGNAL: %s\n", n);
+    DLAppendLogRaw(buf);
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void DLInstallCrashGuards(void) {
+    DLCrashLogPath();
+    NSSetUncaughtExceptionHandler(DLUncaughtExceptionHandler);
+    signal(SIGABRT, DLCrashSignalHandler);
+    signal(SIGSEGV, DLCrashSignalHandler);
+    signal(SIGBUS,  DLCrashSignalHandler);
+    signal(SIGILL,  DLCrashSignalHandler);
+    signal(SIGTRAP, DLCrashSignalHandler);
+    DLLog(@"dylib loaded, crash guards installed, log: %@", DLCrashLogPath());
 }
 
 // ------------------------------------------------------------

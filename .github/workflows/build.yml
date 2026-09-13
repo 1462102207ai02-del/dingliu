@@ -92,12 +92,34 @@ jobs:
 
       - name: Collect artifacts
         run: |
-          mkdir -p dist
-          cp packages/*.deb dist/ 2>/dev/null || true
-          cp .theos/obj/dingliu.dylib dist/dingliu.dylib 2>/dev/null || \
-            cp .theos/obj/debug/dingliu.dylib dist/dingliu.dylib 2>/dev/null || true
-          cd dist && zip -r dingliu-trollfools-dylib.zip dingliu.dylib && cd ..
-          ls -la dist/ 2>&1 | tee /tmp/logs/collect.log
+          set -o pipefail
+          mkdir -p /tmp/logs
+          {
+            set -e
+            mkdir -p dist
+            # 关键修复：Theos 在 Linux 产出的伪签名 LC_CODE_SIGNATURE 是坏的
+            #（偏移/大小为乱码），dyld 强加载校验签名失败 → 秒闪退无日志。
+            # 必须去签 + 重签 + 程序化校验。
+            ldid -r .theos/obj/dingliu.dylib || true
+            ldid -S .theos/obj/dingliu.dylib
+            python3 tools/verify_sig.py .theos/obj/dingliu.dylib
+            # 用重签后的 dylib 重建 deb（包内 dylib 同样有效，并重算 md5sums）
+            rm -rf /tmp/debx && mkdir -p /tmp/debx
+            dpkg-deb -R packages/*.deb /tmp/debx
+            DEBDY=$(find /tmp/debx -name dingliu.dylib -type f | head -1)
+            if [ -n "$DEBDY" ]; then
+              cp .theos/obj/dingliu.dylib "$DEBDY"
+              ( cd /tmp/debx && find . -type f ! -path "./DEBIAN/*" -exec md5sum {} \; \
+                | sed 's|  \./|  |' > DEBIAN/md5sums )
+              rm -f packages/*.deb
+              dpkg-deb -Zxz -b /tmp/debx packages/com.dingliu.wechat.deb
+            fi
+            cp packages/com.dingliu.wechat.deb dist/com.dingliu.wechat_1.0.3_iphoneos-arm64.deb
+            cp .theos/obj/dingliu.dylib dist/dingliu.dylib
+            python3 tools/verify_sig.py dist/dingliu.dylib
+            ( cd dist && zip -q -r dingliu-trollfools-dylib.zip dingliu.dylib )
+            ls -la dist/
+          } 2>&1 | tee /tmp/logs/collect.log
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
