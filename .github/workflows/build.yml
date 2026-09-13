@@ -45,13 +45,13 @@ jobs:
       - name: Install ldid
         run: |
           for i in 1 2 3; do
-            rm -rf /tmp/ldid && git clone --depth=1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid && break || sleep 5
+            curl -sL --retry 3 -o /tmp/ldid \
+              https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 && break || sleep 5
           done
-          cd /tmp/ldid
-          make -j$(nproc) ldid
-          sudo cp ./ldid /usr/local/bin/ldid
-          sudo chmod +x /usr/local/bin/ldid
-          ldid -V || true
+          ls -la /tmp/ldid
+          file /tmp/ldid || true
+          sudo install -m 755 /tmp/ldid /usr/local/bin/ldid
+          ldid -V
 
       - name: Build (rootless)
         run: |
