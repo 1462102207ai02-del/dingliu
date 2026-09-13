@@ -40,6 +40,16 @@ Sileo 添加仓库或直接 `dpkg -i com.dingliu.wechat_1.0.0_iphoneos-arm64.deb
 - 描边：开关、颜色、粗细
 - 其他：连续曲率、系统控件圆角、单元格铺满屏幕宽、恢复默认
 
+## 插件收纳接入
+
+按《插件收纳接入声明》实现：hook `MinimizeViewController` 的 `viewDidLoad`，调用 `WCPluginsMgr.sharedInstance registerControllerWithTitle:version:controller:` 将本插件注册进「插件收纳」归类列表——
+
+- 标题：`你啊爸支鼎溜`
+- 版本：`1.0.0`
+- 设置页 Controller 类名：`DLSettingsController`
+
+仅当设备上装有插件收纳（存在 `WCPluginsMgr` 类）时生效，注册异常有 @try 保护，不会影响未安装收纳的环境。
+
 ## 设计要点
 
 - 数据驱动 hook 表（约 170 条，全部带类名存在性守卫），微信升级改名只会静默跳过，不会崩溃

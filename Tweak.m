@@ -38,6 +38,7 @@ static NSString * const kFullWidth       = @"DLFullWidthCells";      // 单元�
 static NSString * const kCleanBorders    = @"DLCleanSystemBorders";  // 清除系统自带描边
 
 static NSString * const kDisplayName     = @"你啊爸支鼎溜";
+static NSString * const kVersionString    = @"1.0.0";
 
 // hook kind
 enum {
@@ -535,7 +536,7 @@ static void DLPushSettings(void) {
         break;
     }
     if (!top) return;
-    UIViewController *s = [[DLSettingsController class] alloc] init;
+    UIViewController *s = [[DLSettingsController alloc] init];
     UINavigationController *nav = nil;
     if ([top.navigationController isKindOfClass:[UINavigationController class]]) {
         nav = top.navigationController;
@@ -792,6 +793,37 @@ static void DLHookEntryPage(NSString *clsName) {
 }
 
 // ------------------------------------------------------------
+// MARK: - 插件收纳接入 (WCPluginsMgr)
+//   按《插件收纳接入声明》：hook MinimizeViewController 的 viewDidLoad，
+//   调用 WCPluginsMgr.sharedInstance registerControllerWithTitle:version:controller:
+//   把 dingliu 的设置页收纳进插件归类列表。
+// ------------------------------------------------------------
+
+static IMP  gOrigMinimizeViewDidLoad = NULL;
+static BOOL gDLPluginsEntryRegistered = NO;
+
+static void DLMinimizeViewDidLoadIMP(id self, SEL _cmd) {
+    if (gOrigMinimizeViewDidLoad) ((void(*)(id, SEL))gOrigMinimizeViewDidLoad)(self, _cmd);
+
+    if (!gDLPluginsEntryRegistered && NSClassFromString(@"WCPluginsMgr")) {
+        gDLPluginsEntryRegistered = YES;
+        @try {
+            Class mgr = objc_getClass("WCPluginsMgr");
+            id inst = [mgr performSelector:@selector(sharedInstance)];
+            SEL reg = @selector(registerControllerWithTitle:version:controller:);
+            if (inst && [inst respondsToSelector:reg]) {
+                ((void(*)(id, SEL, id, id, id))objc_msgSend)(inst, reg,
+                    kDisplayName,                  // 外显名：你啊爸支鼎溜
+                    kVersionString,                // 版本号
+                    @"DLSettingsController");      // 设置页 Controller 类名
+            }
+        } @catch (NSException *exception) {
+            // 防止因微信版本变动导致闪退
+        }
+    }
+}
+
+// ------------------------------------------------------------
 // MARK: - 安装
 // ------------------------------------------------------------
 
@@ -857,6 +889,16 @@ static void dingliu_init(void) {
         // 设置入口
         DLHookEntryPage(@"MoreViewController");
         DLHookEntryPage(@"NewSettingViewController");
+
+        // 插件收纳接入：MinimizeViewController viewDidLoad 时注册入口
+        Class minCls = NSClassFromString(@"MinimizeViewController");
+        if (minCls) {
+            Method m = class_getInstanceMethod(minCls, @selector(viewDidLoad));
+            if (m) {
+                gOrigMinimizeViewDidLoad = method_getImplementation(m);
+                method_setImplementation(m, (IMP)DLMinimizeViewDidLoadIMP);
+            }
+        }
 
         NSLog(@"[dingliu] 你啊爸支鼎溜 loaded: %d/%d hooks installed", installed, gTableCount);
     }
