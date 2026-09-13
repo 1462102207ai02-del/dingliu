@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Remove a corrupt LC_CODE_SIGNATURE load command from a 64-bit Mach-O,
 returning it to an unsigned state so ldid can sign from scratch.
+The file length is preserved (zero padding) so symtab stroff+strsize
+remains <= file size (ldid asserts on that otherwise).
 Usage: strip_sig.py <path>"""
 import struct
 import sys
@@ -9,6 +11,7 @@ p = sys.argv[1]
 with open(p, "rb") as f:
     d = bytearray(f.read())
 
+orig_len = len(d)
 if struct.unpack_from("<I", d, 0)[0] != 0xFEEDFACF:
     print(f"FAIL {p}: not a 64-bit Mach-O")
     sys.exit(1)
@@ -40,7 +43,10 @@ struct.pack_into("<I", d, 20, sizeofcmds - 24)
 # pad the freed space at the end of the load command region with zeros
 end = 32 + (sizeofcmds - 24)
 d[end:end + 24] = b"\x00" * 24
+# keep the total file length unchanged (symtab may end at old EOF)
+while len(d) < orig_len:
+    d += b"\x00" * 16
 
 with open(p, "wb") as f:
     f.write(d)
-print(f"OK   {p}: stripped corrupt LC_CODE_SIGNATURE (off={dataoff} size={datasize}); unsigned now")
+print(f"OK   {p}: stripped corrupt LC_CODE_SIGNATURE (off={dataoff} size={datasize}); unsigned now, len {orig_len} -> {len(d)}")
