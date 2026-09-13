@@ -6,6 +6,7 @@ static const void *kWDTagKey         = &kWDTagKey;
 static const void *kWDOrigRadiusKey  = &kWDOrigRadiusKey;
 static const void *kWDOrigMaskKey    = &kWDOrigMaskKey;
 static const void *kWDOrigCurveKey   = &kWDOrigCurveKey;
+static const void *kWDOrigCornersKey = &kWDOrigCornersKey;
 static const void *kWDOrigBgKey      = &kWDOrigBgKey;
 static const void *kWDOrigBgColorKey = &kWDOrigBgColorKey;
 static const void *kWDInsetKey       = &kWDInsetKey;
@@ -75,6 +76,7 @@ static void WDStoreOrig(UIView *v) {
     if (objc_getAssociatedObject(v, kWDOrigRadiusKey)) return;
     objc_setAssociatedObject(v, kWDOrigRadiusKey, @(v.layer.cornerRadius), WD_ASSOC);
     objc_setAssociatedObject(v, kWDOrigMaskKey, @(v.layer.masksToBounds ? 1 : 0), WD_ASSOC);
+    objc_setAssociatedObject(v, kWDOrigCornersKey, @(v.layer.maskedCorners), WD_ASSOC);
     if (@available(iOS 13.0, *)) {
         if ([v.layer respondsToSelector:@selector(cornerCurve)]) {
             NSString *cv = v.layer.cornerCurve;
@@ -88,10 +90,12 @@ static void WDRevertRound(UIView *v) {
     if (!orv) return;
     id omv = objc_getAssociatedObject(v, kWDOrigMaskKey);
     id ocv = objc_getAssociatedObject(v, kWDOrigCurveKey);
+    id ocn = objc_getAssociatedObject(v, kWDOrigCornersKey);
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     v.layer.cornerRadius = [orv doubleValue];
     v.layer.masksToBounds = omv ? [omv boolValue] : NO;
+    if (ocn) v.layer.maskedCorners = (CACornerMask)[ocn unsignedIntegerValue];
     if ([ocv isKindOfClass:[NSString class]]) {
         if (@available(iOS 13.0, *)) {
             if ([v.layer respondsToSelector:@selector(setCornerCurve:)]) v.layer.cornerCurve = (NSString *)ocv;
@@ -101,6 +105,7 @@ static void WDRevertRound(UIView *v) {
     objc_setAssociatedObject(v, kWDOrigRadiusKey, nil, WD_ASSOC);
     objc_setAssociatedObject(v, kWDOrigMaskKey, nil, WD_ASSOC);
     objc_setAssociatedObject(v, kWDOrigCurveKey, nil, WD_ASSOC);
+    objc_setAssociatedObject(v, kWDOrigCornersKey, nil, WD_ASSOC);
 }
 
 void WDStyleRound(UIView *view, CGFloat radius, BOOL continuous, int tag) {
@@ -127,7 +132,32 @@ void WDStyleRound(UIView *view, CGFloat radius, BOOL continuous, int tag) {
     [CATransaction commit];
 }
 
-#pragma mark - 单元格（卡片一体化：底板 + contentView 一起缩进）
+void WDStyleRoundCorners(UIView *view, CGFloat radius, NSUInteger corners, BOOL continuous, int tag) {
+    if (!view) return;
+    CALayer *l = view.layer;
+    CGFloat lim = MIN(l.bounds.size.width, l.bounds.size.height) / 2.0;
+    CGFloat r = radius;
+    if (lim > 0 && r > lim) r = lim;
+    if (r < 0) r = 0;
+    if (corners == 0) r = 0;
+    WDStoreOrig(view);
+    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    l.cornerRadius = r;
+    l.maskedCorners = (CACornerMask)corners;
+    l.masksToBounds = (r > 0.5 && corners != 0);
+    if (continuous && r > 0.5) {
+        if (@available(iOS 13.0, *)) {
+            if ([l respondsToSelector:@selector(setCornerCurve:)]) {
+                l.cornerCurve = kCACornerCurveContinuous;
+            }
+        }
+    }
+    [CATransaction commit];
+}
+
+#pragma mark - 单元格（整段卡片：左右缩进，中间行左右平直）
 
 static void WDApplyInset(UITableViewCell *cell, CGRect target) {
     UIView *cv = cell.contentView;
@@ -138,6 +168,27 @@ static void WDApplyInset(UITableViewCell *cell, CGRect target) {
         fabs(cur.size.height - target.size.height) < 0.5) return;
     objc_setAssociatedObject(cell, kWDInsetKey, @YES, WD_ASSOC);
     cv.frame = target;
+}
+
+static NSUInteger WDSectionCorners(UITableViewCell *cell) {
+    UIView *v = cell.superview;
+    UITableView *tv = nil;
+    while (v) {
+        if ([v isKindOfClass:[UITableView class]]) { tv = (UITableView *)v; break; }
+        v = v.superview;
+    }
+    if (!tv) return 0;
+    NSIndexPath *ip = [tv indexPathForCell:cell];
+    if (!ip) {
+        CGPoint p = [cell.superview convertPoint:cell.center toView:tv];
+        ip = [tv indexPathForRowAtPoint:p];
+    }
+    if (!ip) return 0;
+    NSInteger rows = [tv numberOfRowsInSection:ip.section];
+    if (rows <= 1) return 15;
+    if (ip.row == 0) return (kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
+    if (ip.row == rows - 1) return (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner);
+    return 0;
 }
 
 void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
@@ -159,8 +210,9 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
 
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
-    // 上下留缝，每行是独立四角卡片，不是连成一整条
-    CGRect plateF = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(3.0, inx, 3.0, inx));
+    // 整段卡片：左右缩进，中间行左右平直，只有首尾四角。
+    NSUInteger corners = WDSectionCorners(cell);
+    CGRect plateF = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(0, inx, 0, inx));
     if (plateF.size.width < 24 || plateF.size.height < 4) return;
 
     if (!objc_getAssociatedObject(cell, kWDOrigBgKey)) {
@@ -177,23 +229,24 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
         cell.backgroundView = plate;
         cell.backgroundColor = [UIColor clearColor];
     }
-    if (!CGRectEqualToRect(plate.frame, plateF)) plate.frame = plateF;
-    plate.corners = 15;
-    if (fabs(plate.radius - radius) > 0.25) {
-        plate.radius = radius;
-        [plate redraw];
-    }
+    BOOL changed = !CGRectEqualToRect(plate.frame, plateF) ||
+                   fabs(plate.radius - radius) > 0.25 ||
+                   plate.corners != corners;
+    plate.frame = plateF;
+    plate.radius = radius;
+    plate.corners = corners;
+    if (changed) [plate redraw];
     cell.opaque = NO;
     if ([cell respondsToSelector:@selector(setSeparatorInset:)]) {
-        cell.separatorInset = UIEdgeInsetsMake(0, bounds.size.width, 0, 0);
+        cell.separatorInset = UIEdgeInsetsMake(0, 16 + inx, 0, inx);
     }
-    // contentView 同样缩进并四角圆 → 整片卡片。不写 cell.frame。
+    // contentView 同样缩进。中间行不圆角，左右是平的。不写 cell.frame。
     WDApplyInset(cell, plateF);
-    WDStyleRound(cell.contentView, radius, continuous, tag);
-    cell.contentView.clipsToBounds = YES;
+    WDStyleRoundCorners(cell.contentView, radius, corners, continuous, tag);
+    cell.contentView.clipsToBounds = (corners != 0);
     if (cell.selectedBackgroundView) {
         cell.selectedBackgroundView.frame = plateF;
-        WDStyleRound(cell.selectedBackgroundView, radius, continuous, tag);
+        WDStyleRoundCorners(cell.selectedBackgroundView, radius, corners, continuous, tag);
     }
 }
 

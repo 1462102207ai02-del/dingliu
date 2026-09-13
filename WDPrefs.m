@@ -67,7 +67,48 @@ NSString *WDHexForColor(UIColor *c) {
 }
 
 - (BOOL)master { return [_ud objectForKey:@"WD.master"] ? [_ud boolForKey:@"WD.master"] : YES; }
-- (void)setMaster:(BOOL)v { [_ud setBool:v forKey:@"WD.master"]; [self ping]; }
+- (void)setMaster:(BOOL)v {
+    BOOL was = self.master;
+    if (was == v) {
+        [_ud setBool:v forKey:@"WD.master"];
+        [self ping];
+        return;
+    }
+    if (!v && was) {
+        // 关掉：记下当前子开关，界面显示全关，数值保留。再开时按这份恢复。
+        NSMutableDictionary *snap = [NSMutableDictionary dictionary];
+        int n = WDCatalogCount();
+        const WDItem *items = WDCatalogItems();
+        for (int i = 0; i < n; i++) {
+            NSString *name = @(items[i].cls);
+            snap[name] = @([self enabledForClass:name def:items[i].defOn != 0]);
+        }
+        [_ud setObject:snap forKey:@"WD.master.savedOn"];
+        [_ud setBool:[self bgEnabled] forKey:@"WD.master.savedBg"];
+        [_ud setBool:self.continuous forKey:@"WD.master.savedCont"];
+    } else if (v && !was) {
+        NSDictionary *snap = [_ud dictionaryForKey:@"WD.master.savedOn"];
+        if ([snap isKindOfClass:[NSDictionary class]]) {
+            for (NSString *name in snap) {
+                id on = snap[name];
+                if ([on respondsToSelector:@selector(boolValue)]) {
+                    [_ud setBool:[on boolValue] forKey:WDOnKey(name)];
+                }
+            }
+        }
+        if ([_ud objectForKey:@"WD.master.savedBg"]) {
+            [_ud setBool:[_ud boolForKey:@"WD.master.savedBg"] forKey:@"WD.bg.on"];
+        }
+        if ([_ud objectForKey:@"WD.master.savedCont"]) {
+            [_ud setBool:[_ud boolForKey:@"WD.master.savedCont"] forKey:@"WD.continuous"];
+        }
+        [_ud removeObjectForKey:@"WD.master.savedOn"];
+        [_ud removeObjectForKey:@"WD.master.savedBg"];
+        [_ud removeObjectForKey:@"WD.master.savedCont"];
+    }
+    [_ud setBool:v forKey:@"WD.master"];
+    [self ping];
+}
 
 - (BOOL)continuous { return [_ud objectForKey:@"WD.continuous"] ? [_ud boolForKey:@"WD.continuous"] : YES; }
 - (void)setContinuous:(BOOL)v { [_ud setBool:v forKey:@"WD.continuous"]; [self ping]; }
@@ -160,29 +201,6 @@ NSString *WDHexForColor(UIColor *c) {
     [self ping];
 }
 
-- (void)disableAllEnabled {
-    int n = WDCatalogCount();
-    const WDItem *items = WDCatalogItems();
-    for (int i = 0; i < n; i++) {
-        [_ud setBool:NO forKey:WDOnKey(@(items[i].cls))];
-    }
-    [self ping];
-}
-
-- (void)restoreCustomValues {
-    NSDictionary *d = [_ud dictionaryRepresentation];
-    for (NSString *k in d) {
-        if ([k hasPrefix:@"WD.r."] || [k hasPrefix:@"WD.i."]) {
-            [_ud removeObjectForKey:k];
-        }
-    }
-    [_ud removeObjectForKey:@"WD.globalRadius"];
-    [_ud removeObjectForKey:@"WD.globalInset"];
-    [_ud setDouble:14.0 forKey:@"WD.globalRadius"];
-    [_ud setDouble:12.0 forKey:@"WD.globalInset"];
-    [self ping];
-}
-
 - (NSDictionary *)exportDictionary {
     NSMutableDictionary *out = [NSMutableDictionary dictionary];
     NSDictionary *d = [_ud dictionaryRepresentation];
@@ -212,34 +230,57 @@ NSString *WDHexForColor(UIColor *c) {
     return YES;
 }
 
-#pragma mark - 页面背景色
+#pragma mark - 页面背景色（四页共用）
 
-- (BOOL)bgEnabledForPage:(int)page {
-    id v = [_ud objectForKey:WDBgOnKey(page)];
+- (void)migratePageBgIfNeeded {
+    if ([_ud objectForKey:@"WD.bg.migrated"]) return;
+    if ([_ud objectForKey:@"WD.bg.on"] || [_ud objectForKey:@"WD.bg.l"] || [_ud objectForKey:@"WD.bg.d"]) {
+        [_ud setBool:YES forKey:@"WD.bg.migrated"];
+        return;
+    }
+    BOOL on = NO;
+    NSString *lit = nil, *dark = nil;
+    for (int page = 0; page < 4; page++) {
+        if ([_ud boolForKey:WDBgOnKey(page)]) on = YES;
+        if (!lit) lit = [_ud stringForKey:WDBgLitKey(page)];
+        if (!dark) dark = [_ud stringForKey:WDBgDarkKey(page)];
+    }
+    if (on) [_ud setBool:YES forKey:@"WD.bg.on"];
+    if (lit.length) [_ud setObject:lit forKey:@"WD.bg.l"];
+    if (dark.length) [_ud setObject:dark forKey:@"WD.bg.d"];
+    [_ud setBool:YES forKey:@"WD.bg.migrated"];
+}
+
+- (BOOL)bgEnabled {
+    [self migratePageBgIfNeeded];
+    id v = [_ud objectForKey:@"WD.bg.on"];
     return v ? [v boolValue] : NO;
 }
-- (void)setBgEnabled:(BOOL)on forPage:(int)page {
-    [_ud setBool:on forKey:WDBgOnKey(page)];
+- (void)setBgEnabled:(BOOL)on {
+    [self migratePageBgIfNeeded];
+    [_ud setBool:on forKey:@"WD.bg.on"];
     [self ping];
 }
-- (NSString *)bgHexForPage:(int)page dark:(BOOL)dark {
-    return dark ? [_ud stringForKey:WDBgDarkKey(page)] : [_ud stringForKey:WDBgLitKey(page)];
+- (NSString *)bgHexDark:(BOOL)dark {
+    [self migratePageBgIfNeeded];
+    return dark ? [_ud stringForKey:@"WD.bg.d"] : [_ud stringForKey:@"WD.bg.l"];
 }
-- (void)setBgHex:(NSString *)hex forPage:(int)page dark:(BOOL)dark {
-    if (hex.length) [_ud setObject:hex forKey:(dark ? WDBgDarkKey(page) : WDBgLitKey(page))];
-    else [_ud removeObjectForKey:(dark ? WDBgDarkKey(page) : WDBgLitKey(page))];
+- (void)setBgHex:(NSString *)hex dark:(BOOL)dark {
+    [self migratePageBgIfNeeded];
+    NSString *key = dark ? @"WD.bg.d" : @"WD.bg.l";
+    if (hex.length) [_ud setObject:hex forKey:key];
+    else [_ud removeObjectForKey:key];
     [self ping];
 }
-- (UIColor *)bgColorForPage:(int)page dark:(BOOL)dark {
-    UIColor *c = WDColorForHex([self bgHexForPage:page dark:dark]);
-    // 深色模式下若没单独设深色，回退到浅色值，避免"设了没反应"
-    if (!c && dark) c = WDColorForHex([self bgHexForPage:page dark:NO]);
+- (UIColor *)bgColorDark:(BOOL)dark {
+    UIColor *c = WDColorForHex([self bgHexDark:dark]);
+    if (!c && dark) c = WDColorForHex([self bgHexDark:NO]);
     return c;
 }
-- (void)resetPage:(int)page {
-    [_ud removeObjectForKey:WDBgOnKey(page)];
-    [_ud removeObjectForKey:WDBgLitKey(page)];
-    [_ud removeObjectForKey:WDBgDarkKey(page)];
+- (void)resetBg {
+    [_ud removeObjectForKey:@"WD.bg.on"];
+    [_ud removeObjectForKey:@"WD.bg.l"];
+    [_ud removeObjectForKey:@"WD.bg.d"];
     [self ping];
 }
 

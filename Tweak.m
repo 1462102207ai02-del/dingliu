@@ -185,10 +185,11 @@ static void WDSnapshot(void) {
         gSnap[i].kind = items[i].kind;
         if (items[i].kind == WDKindBubble) gSnap[i].i = 0;
     }
-    for (int pg = 0; pg < (int)WDPageCount && pg < 8; pg++) {
-        gPageOn[pg] = [p bgEnabledForPage:pg] ? 1 : 0;
-        NSString *l = [p bgHexForPage:pg dark:NO];
-        NSString *d = [p bgHexForPage:pg dark:YES];
+    char on = [p bgEnabled] ? 1 : 0;
+    NSString *l = [p bgHexDark:NO];
+    NSString *d = [p bgHexDark:YES];
+    for (int pg = 0; pg < 8; pg++) {
+        gPageOn[pg] = on;
         gPageHex[pg][0][0] = 0;
         gPageHex[pg][1][0] = 0;
         if (l.length) snprintf(gPageHex[pg][0], 16, "%s", l.UTF8String);

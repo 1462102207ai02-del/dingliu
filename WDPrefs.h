@@ -28,20 +28,18 @@ NSString *WDHexForColor(UIColor *c);
 - (BOOL)hasCustomInset:(NSString *)name;
 - (void)resetClass:(NSString *)name;
 - (void)resetAll;
-- (void)disableAllEnabled;
-- (void)restoreCustomValues;
 - (NSDictionary *)exportDictionary;
 - (BOOL)importDictionary:(NSDictionary *)dict;
 - (void)reload;
 - (void)ping;
 
-// 四个 Tab 页背景色：浅色 / 深色可分别设定
-- (BOOL)bgEnabledForPage:(int)page;
-- (void)setBgEnabled:(BOOL)on forPage:(int)page;
-- (NSString *)bgHexForPage:(int)page dark:(BOOL)dark;
-- (void)setBgHex:(NSString *)hex forPage:(int)page dark:(BOOL)dark;
-- (UIColor *)bgColorForPage:(int)page dark:(BOOL)dark;
-- (void)resetPage:(int)page;
+// 四个 Tab 共用一份背景色（改一处，微信/通讯录/发现/我同步）
+- (BOOL)bgEnabled;
+- (void)setBgEnabled:(BOOL)on;
+- (NSString *)bgHexDark:(BOOL)dark;
+- (void)setBgHex:(NSString *)hex dark:(BOOL)dark;
+- (UIColor *)bgColorDark:(BOOL)dark;
+- (void)resetBg;
 @end
 
 #endif

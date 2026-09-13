@@ -1,9 +1,9 @@
 // WechatDuo 设置页
-// v1.1.0
-//   - 设置项按「页面顺序」分类，不再一屏铺开上百项
-//   - 数值一律用输入框（不留滑杆），颜色一律用系统原生取色器
-//   - 设置页自身也是卡片化 + 圆角 + 双侧缩进
-//   - 总开关一关：所有独立开关置灰，插件整体不生效
+// v1.1.2
+//   - 总开关挂钩：关总开关时子开关全部显示为关，再开只恢复关掉前的状态
+//   - 页面背景色合并为一项，放进全局，四页同步
+//   - 去掉右上角「完成」；开关和数值改完立刻生效
+//   - 管理只留：导出 / 恢复 / 全部恢复默认
 
 #import "WDSettings.h"
 #import "WDPrefs.h"
@@ -112,6 +112,10 @@
         self.tableView.backgroundColor = [UIColor groupTableViewBackgroundColor];
     }
 }
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
+}
 
 - (WDCell *)wdCell:(UITableView *)tv ident:(NSString *)rid style:(UITableViewCellStyle)st {
     WDCell *c = (WDCell *)[tv dequeueReusableCellWithIdentifier:rid];
@@ -181,11 +185,14 @@
 }
 
 - (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)ip {
-    (void)tv; (void)ip;
-    // InsetGrouped 已经给出页级缩进和分区卡片。按钮行也要独立四角，再叠一层底板。
+    NSInteger rows = [tv numberOfRowsInSection:ip.section];
+    NSUInteger corners = 0;
+    if (rows <= 1) corners = 15;
+    else if (ip.row == 0) corners = (kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
+    else if (ip.row == rows - 1) corners = (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner);
     WDPrefs *p = [WDPrefs shared];
     CGFloat r = MIN(p.globalRadius > 0 ? p.globalRadius : 14, 14);
-    WDStyleSettingsCell(cell, 0, r, 15, p.continuous);
+    WDStyleSettingsCell(cell, 0, r, corners, p.continuous);
 }
 
 @end
@@ -245,7 +252,7 @@
     WDCell *c = [self wdCell:tv ident:@"d.row" style:UITableViewCellStyleDefault];
     if (ip.row == 0) {
         c.textLabel.text = @"启用";
-        [self wdSwitch:c action:@selector(onSwitch:) on:[p enabledForClass:name def:it->defOn != 0] enabled:master];
+        [self wdSwitch:c action:@selector(onSwitch:) on:(master && [p enabledForClass:name def:it->defOn != 0]) enabled:master];
         if (!master) c.textLabel.textColor = [UIColor secondaryLabelColor];
         return c;
     }
@@ -275,6 +282,7 @@
 }
 
 - (void)onSwitch:(UISwitch *)sw {
+    if (![WDPrefs shared].master) return;
     [[WDPrefs shared] setEnabled:sw.on forClass:self.clsName];
 }
 
@@ -344,7 +352,6 @@
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
-    if (![WDPrefs shared].master) return;
     NSArray *idxs = WDCatalogIndexesForPage(self.page);
     WDClassDetailController *d = [[WDClassDetailController alloc] init];
     d.idx = [idxs[(NSUInteger)ip.row] intValue];
@@ -352,16 +359,16 @@
 }
 
 - (void)onSwitch:(UISwitch *)sw {
+    if (![WDPrefs shared].master) return;
     const WDItem *it = &WDCatalogItems()[(int)sw.tag];
     [[WDPrefs shared] setEnabled:sw.on forClass:@(it->cls)];
 }
 
 @end
 
-#pragma mark - 页面背景色（原生取色器）
+#pragma mark - 页面背景色（四页共用，原生取色器）
 
 @interface WDColorController : WDListController <UIColorPickerViewControllerDelegate>
-@property (nonatomic, assign) int page;
 @property (nonatomic, assign) BOOL pickingDark;
 @end
 
@@ -369,7 +376,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = [NSString stringWithFormat:@"%@ 背景", WDTabTitle(self.page)];
+    self.title = @"页面背景色";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 2; }
@@ -377,28 +384,28 @@
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
     if (s != 0) return nil;
-    return @"浅色 / 深色分别设定。深色没单独设时沿用浅色值。取色器为系统原生控件，支持透明度。";
+    return @"微信 / 通讯录 / 发现 / 我 四页同步。浅色 / 深色分别设定，深色没单独设时沿用浅色。";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
     WDPrefs *p = [WDPrefs shared];
     if (ip.section == 1) {
         WDCell *c = [self wdCell:tv ident:@"bg.reset" style:UITableViewCellStyleDefault];
-        c.textLabel.text = @"恢复本页默认";
+        c.textLabel.text = @"恢复背景默认";
         c.textLabel.textAlignment = NSTextAlignmentCenter;
         c.textLabel.textColor = [UIColor systemRedColor];
         return c;
     }
     WDCell *c = [self wdCell:tv ident:@"bg.row" style:UITableViewCellStyleValue1];
     if (ip.row == 0) {
-        c.textLabel.text = @"启用本页背景色";
-        [self wdSwitch:c action:@selector(onSwitch:) on:[p bgEnabledForPage:self.page] enabled:p.master];
+        c.textLabel.text = @"启用背景色";
+        [self wdSwitch:c action:@selector(onSwitch:) on:(p.master && p.bgEnabled) enabled:p.master];
         if (!p.master) c.textLabel.textColor = [UIColor secondaryLabelColor];
         return c;
     }
     BOOL dark = (ip.row == 2);
     c.textLabel.text = dark ? @"深色模式" : @"浅色模式";
-    NSString *hex = [p bgHexForPage:self.page dark:dark];
+    NSString *hex = [p bgHexDark:dark];
     c.detailTextLabel.text = hex.length ? hex : @"未设置";
     [self wdDot:c color:WDColorForHex(hex)];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -414,7 +421,7 @@
     WDPrefs *p = [WDPrefs shared];
     if (!p.master) return;
     if (ip.section == 1) {
-        [p resetPage:self.page];
+        [p resetBg];
         [tv reloadData];
         return;
     }
@@ -424,7 +431,8 @@
 }
 
 - (void)onSwitch:(UISwitch *)sw {
-    [[WDPrefs shared] setBgEnabled:sw.on forPage:self.page];
+    if (![WDPrefs shared].master) return;
+    [[WDPrefs shared] setBgEnabled:sw.on];
     [self.tableView reloadData];
 }
 
@@ -435,23 +443,23 @@
         vc.delegate = self;
         vc.supportsAlpha = YES;
         vc.title = self.pickingDark ? @"深色模式背景" : @"浅色模式背景";
-        UIColor *cur = WDColorForHex([p bgHexForPage:self.page dark:self.pickingDark]);
+        UIColor *cur = WDColorForHex([p bgHexDark:self.pickingDark]);
         if (cur) vc.selectedColor = cur;
         [self presentViewController:vc animated:YES completion:nil];
         return;
     }
-    // iOS 14 以下兜底：手写十六进制
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"背景色"
                                                                message:@"填写 #RRGGBB 或 #AARRGGBB"
                                                         preferredStyle:UIAlertControllerStyleAlert];
     [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.text = [[WDPrefs shared] bgHexForPage:self.page dark:self.pickingDark] ?: @"";
+        tf.text = [[WDPrefs shared] bgHexDark:self.pickingDark] ?: @"";
         tf.placeholder = @"#RRGGBB";
     }];
     __weak typeof(self) ws = self;
     [a addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act) {
+        (void)act;
         NSString *t = a.textFields.firstObject.text ?: @"";
-        [[WDPrefs shared] setBgHex:t forPage:ws.page dark:ws.pickingDark];
+        [[WDPrefs shared] setBgHex:t dark:ws.pickingDark];
         [ws.tableView reloadData];
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
@@ -460,12 +468,12 @@
 
 - (void)colorPickerViewControllerDidSelectColor:(UIColorPickerViewController *)vc {
     NSString *hex = WDHexForColor(vc.selectedColor);
-    if (hex) [[WDPrefs shared] setBgHex:hex forPage:self.page dark:self.pickingDark];
+    if (hex) [[WDPrefs shared] setBgHex:hex dark:self.pickingDark];
 }
 
 - (void)colorPickerViewControllerDidFinish:(UIColorPickerViewController *)vc {
     NSString *hex = WDHexForColor(vc.selectedColor);
-    if (hex) [[WDPrefs shared] setBgHex:hex forPage:self.page dark:self.pickingDark];
+    if (hex) [[WDPrefs shared] setBgHex:hex dark:self.pickingDark];
     [self.tableView reloadData];
 }
 
@@ -478,37 +486,25 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = WD_DISPLAY_NAME;
-    self.navigationItem.rightBarButtonItem =
-        [[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone
-                                        target:self action:@selector(close)];
 }
 
-- (void)close {
-    [self.view endEditing:YES];
-    if (self.presentingViewController) [self dismissViewControllerAnimated:YES completion:nil];
-    else [self.navigationController popViewControllerAnimated:YES];
-}
-
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 4; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 3; }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
-    if (s == 0) return 4;
-    if (s == 1) return 4;                 // 四个 Tab 背景色
-    if (s == 2) return (NSInteger)WDPageCount;
-    return 5;
+    if (s == 0) return 5;
+    if (s == 1) return (NSInteger)WDPageCount;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
     if (s == 0) return @"全局";
-    if (s == 1) return @"页面背景色";
-    if (s == 2) return @"按页面分类设置";
+    if (s == 1) return @"按页面分类设置";
     return @"管理";
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
-    if (s == 0) return [NSString stringWithFormat:@"%@ v%@  ·  微信 8.0.70+ / iOS 14+", WD_DISPLAY_NAME, WD_VERSION];
-    if (s == 1) return @"微信首页四个板块的背景色，浅色 / 深色可分别自定义。";
-    if (s == 2) return @"按微信页面顺序分类，点进去只看到该页的元素。";
+    if (s == 0) return [NSString stringWithFormat:@"%@ v%@  ·  开关和数值改完立刻生效。关总开关会记住当前子开关，再开时原样恢复。", WD_DISPLAY_NAME, WD_VERSION];
+    if (s == 1) return @"按微信页面顺序分类，点进去只看到该页的元素。";
     return @"导出为 plist。恢复配置可从文件 App / 隔空投送选择外部 plist。";
 }
 
@@ -516,49 +512,22 @@
     WDPrefs *p = [WDPrefs shared];
     BOOL master = p.master;
 
-    if (ip.section == 3) {
+    if (ip.section == 2) {
         WDCell *c = [self wdCell:tv ident:@"r" style:UITableViewCellStyleDefault];
-        static NSString *titles[] = {
-            @"关闭所有已开启项",
-            @"还原所有自定义值",
-            @"导出插件配置",
-            @"恢复插件配置",
-            @"全部恢复默认"
-        };
-        NSInteger row = ip.row;
-        if (row < 0) row = 0;
-        if (row > 4) row = 4;
-        c.textLabel.text = titles[row];
+        if (ip.row == 0) c.textLabel.text = @"导出插件配置";
+        else if (ip.row == 1) c.textLabel.text = @"恢复插件配置";
+        else c.textLabel.text = @"全部恢复默认";
         c.textLabel.textAlignment = NSTextAlignmentCenter;
-        c.textLabel.textColor = (row == 4) ? [UIColor systemRedColor] : [UIColor systemBlueColor];
+        c.textLabel.textColor = (ip.row == 2) ? [UIColor systemRedColor] : [UIColor systemBlueColor];
         return c;
     }
 
     if (ip.section == 1) {
-        int page = WDPageForTabIndex((int)ip.row);
-        WDCell *c = [self wdCell:tv ident:@"bg" style:UITableViewCellStyleValue1];
-        c.textLabel.text = WDTabTitle(page);
-        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        NSString *hex = [p bgHexForPage:page dark:NO];
-        c.detailTextLabel.text = [p bgEnabledForPage:page] ? (hex.length ? hex : @"已启用") : @"未启用";
-        [self wdDot:c color:WDColorForHex(hex)];
-        if (!master) {
-            c.textLabel.textColor = [UIColor secondaryLabelColor];
-            c.userInteractionEnabled = NO;
-        }
-        return c;
-    }
-
-    if (ip.section == 2) {
         WDCell *c = [self wdCell:tv ident:@"p" style:UITableViewCellStyleValue1];
         c.textLabel.text = WDPageTitle((int)ip.row);
         c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         NSUInteger n = WDCatalogIndexesForPage((int)ip.row).count;
         c.detailTextLabel.text = [NSString stringWithFormat:@"%lu 项", (unsigned long)n];
-        if (!master) {
-            c.textLabel.textColor = [UIColor secondaryLabelColor];
-            c.userInteractionEnabled = NO;
-        }
         return c;
     }
 
@@ -570,17 +539,24 @@
     }
     if (ip.row == 1) {
         c.textLabel.text = @"连续曲率";
-        [self wdSwitch:c action:@selector(contChanged:) on:p.continuous enabled:master];
+        [self wdSwitch:c action:@selector(contChanged:) on:(master && p.continuous) enabled:master];
     } else if (ip.row == 2) {
         c.textLabel.text = @"全局圆角";
         [self wdNumber:c value:[NSString stringWithFormat:@"%.0f", p.globalRadius]
            placeholder:@"14" tag:1];
         c.num.enabled = master;
-    } else {
+    } else if (ip.row == 3) {
         c.textLabel.text = @"全局缩进";
         [self wdNumber:c value:[NSString stringWithFormat:@"%.0f", p.globalInset]
            placeholder:@"12" tag:2];
         c.num.enabled = master;
+    } else {
+        c.textLabel.text = @"页面背景色";
+        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        NSString *hex = [p bgHexDark:NO];
+        c.detailTextLabel.text = (master && p.bgEnabled) ? (hex.length ? hex : @"已启用") : @"未启用";
+        [self wdDot:c color:WDColorForHex(hex)];
+        return c;
     }
     if (!master) c.textLabel.textColor = [UIColor secondaryLabelColor];
     return c;
@@ -588,35 +564,24 @@
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
-    if (![WDPrefs shared].master && ip.section != 0 && ip.section != 3) return;
-    if (ip.section == 1) {
+    if (ip.section == 0 && ip.row == 4) {
+        if (![WDPrefs shared].master) return;
         WDColorController *v = [[WDColorController alloc] init];
-        v.page = WDPageForTabIndex((int)ip.row);
         [self.navigationController pushViewController:v animated:YES];
         return;
     }
-    if (ip.section == 2) {
+    if (ip.section == 1) {
         WDClassListController *v = [[WDClassListController alloc] init];
         v.page = (int)ip.row;
         [self.navigationController pushViewController:v animated:YES];
         return;
     }
-    if (ip.section == 3) {
+    if (ip.section == 2) {
         if (ip.row == 0) {
-            [self confirmTitle:@"关闭所有已开启项" msg:@"所有类的开关都会关掉，圆角/缩进数值保留。" ok:@"关闭" run:^{
-                [[WDPrefs shared] disableAllEnabled];
-                [self.tableView reloadData];
-            }];
-        } else if (ip.row == 1) {
-            [self confirmTitle:@"还原所有自定义值" msg:@"圆角和缩进回到默认，开关状态保留。" ok:@"还原" run:^{
-                [[WDPrefs shared] restoreCustomValues];
-                [self.tableView reloadData];
-            }];
-        } else if (ip.row == 2) {
             [self exportConfig];
-        } else if (ip.row == 3) {
+        } else if (ip.row == 1) {
             [self importConfig];
-        } else if (ip.row == 4) {
+        } else if (ip.row == 2) {
             [self confirmTitle:@"全部恢复默认" msg:@"开关、圆角、缩进全部回到出厂。" ok:@"恢复" run:^{
                 [[WDPrefs shared] resetAll];
                 [self.tableView reloadData];
@@ -684,6 +649,7 @@
     [self.tableView reloadData];
 }
 - (void)contChanged:(UISwitch *)sw {
+    if (![WDPrefs shared].master) return;
     [WDPrefs shared].continuous = sw.on;
 }
 - (void)wdNumberDone:(UITextField *)f {
