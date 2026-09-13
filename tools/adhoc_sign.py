@@ -137,12 +137,23 @@ class MachO(object):
         slides = [s[1] - s[3] for n, s in self.segs.items() if n != "__LINKEDIT"]
         slide = min(slides) if slides else 0
         want = vmaddr - slide
-        if fileoff != want:
-            print(f"repair __LINKEDIT fileoff 0x{fileoff:x} -> 0x{want:x} "
-                  f"(vmaddr=0x{vmaddr:x}, slide=0x{slide:x})")
-            struct.pack_into("<Q", self.d, lc + 40, want)
-            self.segs["__LINKEDIT"][3] = want
-            self.scan()
+        if fileoff == want:
+            return
+        # 只在「修完仍指向文件内部」时才修。否则会把 fileoff 推到文件之外，
+        # 后面算 __LINKEDIT 的 filesize 会变成负数并直接 struct.error
+        # （v1.1.0 的 dylib 变大后 fileoff/vmaddr 出现间隙就踩到了）。
+        if want < 0 or want > len(self.d):
+            print(f"skip __LINKEDIT fileoff repair 0x{fileoff:x} -> 0x{want:x} "
+                  f"(target outside file, size=0x{len(self.d):x})")
+            return
+        if want < fileoff:
+            print(f"skip __LINKEDIT fileoff repair 0x{fileoff:x} -> 0x{want:x} (backwards)")
+            return
+        print(f"repair __LINKEDIT fileoff 0x{fileoff:x} -> 0x{want:x} "
+              f"(vmaddr=0x{vmaddr:x}, slide=0x{slide:x})")
+        struct.pack_into("<Q", self.d, lc + 40, want)
+        self.segs["__LINKEDIT"][3] = want
+        self.scan()
 
     def repair_uuid(self):
         """v2 wrote SuperBlob offsets into LC_UUID. Restore a random UUID."""
@@ -201,6 +212,8 @@ class MachO(object):
         if "__LINKEDIT" in self.segs:
             lc, _vmaddr, _vmsize, fileoff, _filesize = self.segs["__LINKEDIT"]
             new_filesize = dataoff + sb_len - fileoff
+            if new_filesize <= 0:
+                new_filesize = sb_len
             new_vmsize = align(new_filesize, PAGE_SIZE)
             struct.pack_into("<Q", d, lc + 48, new_filesize)
             struct.pack_into("<Q", d, lc + 32, new_vmsize)
