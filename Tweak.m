@@ -58,6 +58,8 @@ static WDSnap gSnap[160];
 // 四个 Tab 之外的页面也预留，方便以后扩展
 static char gPageOn[8];
 static char gPageHex[8][2][16];
+static char gCardInOn = 0;
+static char gCardInHex[2][16];
 
 #define WD_MAX_DEPTH 6
 #define WD_ASSOC OBJC_ASSOCIATION_RETAIN_NONATOMIC
@@ -208,9 +210,9 @@ static void WDSnapshot(void) {
             gHomeI = gSnap[i].i;
         }
     }
-    char on = [p bgEnabled] ? 1 : 0;
-    NSString *l = [p bgHexDark:NO];
-    NSString *d = [p bgHexDark:YES];
+    char on = [p cardOutEnabled] ? 1 : 0;
+    NSString *l = [p cardOutHexDark:NO];
+    NSString *d = [p cardOutHexDark:YES];
     for (int pg = 0; pg < 8; pg++) {
         gPageOn[pg] = on;
         gPageHex[pg][0][0] = 0;
@@ -218,6 +220,15 @@ static void WDSnapshot(void) {
         if (l.length) snprintf(gPageHex[pg][0], 16, "%s", l.UTF8String);
         if (d.length) snprintf(gPageHex[pg][1], 16, "%s", d.UTF8String);
     }
+    gCardInOn = [p cardInEnabled] ? 1 : 0;
+    gCardInHex[0][0] = 0;
+    gCardInHex[1][0] = 0;
+    NSString *inL = [p cardInHexDark:NO];
+    NSString *inD = [p cardInHexDark:YES];
+    if (inL.length) snprintf(gCardInHex[0], 16, "%s", inL.UTF8String);
+    if (inD.length) snprintf(gCardInHex[1], 16, "%s", inD.UTF8String);
+    WDStyleSyncColors(gMaster, gCardInOn != 0, gCardInHex[0], gCardInHex[1],
+                      on != 0, gPageHex[0][0], gPageHex[0][1]);
 }
 
 static BOOL WDNameHas(const char *nm, const char *needle) {
@@ -274,6 +285,7 @@ static void WDDecorate(id self, int idx) {
     if (!gSnap[idx].on) return;
     if (![self isKindOfClass:[UIView class]]) return;
     UIView *v = (UIView *)self;
+    if (WDStyleShouldSkip(v)) return;
     if (WDIsChatView(v)) return;
     const WDItem *it = &WDCatalogItems()[idx];
     if (it->kind == WDKindBubble || it->group == WDGroupBubble) return;
@@ -461,13 +473,16 @@ static void WDPaintNavChrome(UIViewController *vc, UIColor *want) {
     for (UIView *s in v.subviews) {
         const char *nm = class_getName(object_getClass(s));
         if (!nm) continue;
+        if (strstr(nm, "RightTopMenu") || strstr(nm, "BarItemCustom") ||
+            strstr(nm, "MMBarButton") || strstr(nm, "MFTitleView")) continue;
         if (strstr(nm, "SearchBar") || strstr(nm, "WCSearch") ||
-            strstr(nm, "TopHeader") || strstr(nm, "CustomBar") ||
-            strstr(nm, "TitleView") || strstr(nm, "NavBar")) {
+            strstr(nm, "TopHeader") || strstr(nm, "NavBar")) {
             WDPaintView(s, want);
             for (UIView *c in s.subviews) {
                 const char *cn = class_getName(object_getClass(c));
-                if (cn && (strstr(cn, "Container") || strstr(cn, "Background") || strstr(cn, "Spacer"))) {
+                if (!cn) continue;
+                if (strstr(cn, "RightTop") || strstr(cn, "BarButton") || strstr(cn, "AddButton")) continue;
+                if (strstr(cn, "Container") || strstr(cn, "Background") || strstr(cn, "Spacer")) {
                     WDPaintView(c, want);
                 }
             }
@@ -486,6 +501,8 @@ static void WDPaintTree(UIViewController *vc, UIColor *want) {
     for (UIView *s in vc.view.subviews) {
         if ([s isKindOfClass:[UIScrollView class]]) WDPaintView(s, want);
         const char *nm = class_getName(object_getClass(s));
+        if (nm && (strstr(nm, "RightTopMenu") || strstr(nm, "BarItemCustom") ||
+                   strstr(nm, "MMBarButton") || strstr(nm, "MFTitleView"))) continue;
         if (nm && (strstr(nm, "SearchBar") || strstr(nm, "TopHeader") || strstr(nm, "CustomBar"))) {
             WDPaintView(s, want);
         }
@@ -685,6 +702,7 @@ static int gDefCellIdx = -2;
 static void WDDecorateCellIfNeeded(UITableViewCell *cell) {
     if (!gLive || !gMaster || gSafe) return;
     if (![cell isKindOfClass:[UITableViewCell class]]) return;
+    if (WDStyleShouldSkip(cell)) return;
     if (WDIsChatView(cell)) return;
     int idx = WDIdxForClass(object_getClass(cell));
     if (idx < 0) {
@@ -711,7 +729,7 @@ static BOOL WDHookWillDisplay(const char *clsName) {
     IMP stub = imp_implementationWithBlock(^(id slf, UITableView *tv, UITableViewCell *cell, NSIndexPath *ip) {
         if (orig) ((void (*)(id, SEL, id, id, id))orig)(slf, s, tv, cell, ip);
         if (![NSThread isMainThread]) return;
-        if (gLive && gMaster && !gSafe && [cell isKindOfClass:[UITableViewCell class]] && !WDIsChatView(cell)) {
+        if (gLive && gMaster && !gSafe && [cell isKindOfClass:[UITableViewCell class]] && !WDIsChatView(cell) && !WDStyleShouldSkip(cell)) {
             int idx = WDIdxForClass(object_getClass(cell));
             if (idx < 0) {
                 if (gDefCellIdx == -2) gDefCellIdx = WDIndexOfClassName("MMTableViewCell");
@@ -866,7 +884,6 @@ static void WDInstallTableDisplay(void) {
         "NewSettingViewController",
         "WCTableViewManager",
         "MMTableViewInfo",
-        "ContactTagListViewController",
         "BrandContactsViewController",
         "ContactsGenericViewController",
         NULL

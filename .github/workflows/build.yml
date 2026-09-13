@@ -111,11 +111,17 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.5
-          name: WechatDuo v1.1.5
+          tag_name: v1.1.6
+          name: WechatDuo v1.1.6
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.6**
+              - 卡片内 / 卡片外背景色分开设置，覆盖所有页面
+              - 头像与消息时间用 transform 内边距，不写 frame
+              - 搜索栏只圆内层 searchBox / textField，不再对外层打孔
+              - 首页 + 号保持原生顶栏按钮，不卡片化
+              - 通讯录「标签」二级页跳过打孔，避免卡死
             - **v1.1.5**
               - 列表打孔 overlay：不改内容 frame，消息时间/文字位置不变；分割线画在卡片内，卡片外分割线隐藏
               - 置顶横幅可点：plate 不接收点击、宿主不 clip

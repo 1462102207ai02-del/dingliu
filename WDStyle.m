@@ -1,5 +1,7 @@
 #import "WDStyle.h"
+#import "WDPrefs.h"
 #import <string.h>
+#import <stdio.h>
 
 static const void *kWDPlateKey       = &kWDPlateKey;
 static const void *kWDTagKey         = &kWDTagKey;
@@ -11,6 +13,41 @@ static const void *kWDOrigBgKey      = &kWDOrigBgKey;
 static const void *kWDOrigBgColorKey = &kWDOrigBgColorKey;
 static const void *kWDInsetKey       = &kWDInsetKey;
 static const void *kWDTableBgKey     = &kWDTableBgKey;
+static const void *kWDOrigTFKey      = &kWDOrigTFKey;
+static const void *kWDRowsCacheKey   = &kWDRowsCacheKey;
+static const void *kWDCatCacheKey    = &kWDCatCacheKey;
+
+static BOOL gColMaster = YES;
+static BOOL gInOn = NO;
+static BOOL gOutOn = NO;
+static char gInL[16];
+static char gInD[16];
+static char gOutL[16];
+static char gOutD[16];
+
+void WDStyleSyncColors(BOOL master, BOOL inOn, const char *inL, const char *inD,
+                       BOOL outOn, const char *outL, const char *outD) {
+    gColMaster = master;
+    gInOn = inOn;
+    gOutOn = outOn;
+    gInL[0] = gInD[0] = gOutL[0] = gOutD[0] = 0;
+    if (inL && inL[0]) snprintf(gInL, 16, "%s", inL);
+    if (inD && inD[0]) snprintf(gInD, 16, "%s", inD);
+    if (outL && outL[0]) snprintf(gOutL, 16, "%s", outL);
+    if (outD && outD[0]) snprintf(gOutD, 16, "%s", outD);
+}
+
+static BOOL WDStyleDark(void) {
+    if (@available(iOS 13.0, *)) {
+        return [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+    }
+    return NO;
+}
+
+static UIColor *WDHexC(const char *s) {
+    if (!s || !s[0]) return nil;
+    return WDColorForHex([NSString stringWithUTF8String:s]);
+}
 
 #define WD_ASSOC OBJC_ASSOCIATION_RETAIN_NONATOMIC
 
@@ -202,7 +239,64 @@ static UIColor *WDCardFill(void) {
     return [UIColor whiteColor];
 }
 
+static UIColor *WDResolvedOut(void) {
+    if (!gColMaster || !gOutOn) return WDGroupedFill();
+    BOOL dark = WDStyleDark();
+    UIColor *c = WDHexC(dark ? gOutD : gOutL);
+    if (!c && dark) c = WDHexC(gOutL);
+    return c ?: WDGroupedFill();
+}
+
+static UIColor *WDResolvedIn(void) {
+    if (!gColMaster || !gInOn) return WDCardFill();
+    BOOL dark = WDStyleDark();
+    UIColor *c = WDHexC(dark ? gInD : gInL);
+    if (!c && dark) c = WDHexC(gInL);
+    return c ?: WDCardFill();
+}
+
+BOOL WDStyleShouldSkip(UIView *view) {
+    if (!view) return YES;
+    UIView *p = view;
+    int d = 0;
+    while (p && d < 10) {
+        const char *nm = class_getName(object_getClass(p));
+        if (nm) {
+            if (strstr(nm, "ContactTag")) return YES;
+            if (strstr(nm, "RightTopMenu")) return YES;
+            if (strstr(nm, "BarItemCustom")) return YES;
+            if (strstr(nm, "MainFrameCustomBar")) return YES;
+            if (strstr(nm, "MFTitleView")) return YES;
+            if (strstr(nm, "MMBarButton")) return YES;
+            if (strstr(nm, "WCPlugins")) return YES;
+        }
+        p = p.superview;
+        d++;
+    }
+    return NO;
+}
+
+static BOOL WDTableIsTagList(UITableView *tv) {
+    if (!tv) return NO;
+    id del = tv.delegate;
+    if (del) {
+        const char *n = class_getName(object_getClass(del));
+        if (n && strstr(n, "ContactTag")) return YES;
+    }
+    UIView *p = tv;
+    int d = 0;
+    while (p && d < 12) {
+        const char *nm = class_getName(object_getClass(p));
+        if (nm && strstr(nm, "ContactTag")) return YES;
+        p = p.superview;
+        d++;
+    }
+    return NO;
+}
+
 static UIColor *WDGapFillForView(UIView *view) {
+    UIColor *want = WDResolvedOut();
+    if (gColMaster && gOutOn) return want;
     UIView *sv = view;
     while (sv) {
         if ([sv isKindOfClass:[UITableView class]]) {
@@ -227,19 +321,45 @@ static void WDPaintTableGap(UITableView *tv, UIColor *fill) {
     tv.separatorColor = [UIColor clearColor];
 }
 
+static NSInteger WDCachedRows(UITableView *tv, NSInteger section) {
+    if (!tv) return 1;
+    NSMutableDictionary *cache = objc_getAssociatedObject(tv, kWDRowsCacheKey);
+    if (![cache isKindOfClass:[NSMutableDictionary class]]) {
+        cache = [NSMutableDictionary dictionary];
+        objc_setAssociatedObject(tv, kWDRowsCacheKey, cache, WD_ASSOC);
+    }
+    NSNumber *key = @(section);
+    NSNumber *hit = cache[key];
+    if (hit) return hit.integerValue;
+    NSInteger rows = 1;
+    @try { rows = [tv numberOfRowsInSection:section]; } @catch (NSException *e) { rows = 1; }
+    cache[key] = @(rows);
+    return rows;
+}
+
+static NSInteger WDCachedFirstLetter(UITableView *tv, id del) {
+    if (!tv || !del) return 0;
+    NSNumber *hit = objc_getAssociatedObject(tv, kWDCatCacheKey);
+    if (hit) return hit.integerValue;
+    NSInteger firstLetter = 0;
+    @try {
+        firstLetter = ((NSInteger (*)(id, SEL, NSInteger))objc_msgSend)(del, @selector(ConvertToNormalContactSection:), 0);
+    } @catch (NSException *e) { firstLetter = 0; }
+    objc_setAssociatedObject(tv, kWDCatCacheKey, @(firstLetter), WD_ASSOC);
+    return firstLetter;
+}
+
 static NSUInteger WDSectionCornersAt(UITableView *tv, NSIndexPath *ip) {
     if (!tv || !ip) return 15;
+    // 标签页 layout 里查 dataSource 会重入卡死，整页跳过打孔。
+    if (WDTableIsTagList(tv)) return 15;
     // 通讯录顶部五大类（新的朋友/群聊/标签/公众号/企业微信）可能拆成多个 section，合成一整片。
     id del = tv.delegate;
     if (del && [del respondsToSelector:@selector(ConvertToNormalContactSection:)]) {
-        NSInteger firstLetter = 0;
-        @try {
-            firstLetter = ((NSInteger (*)(id, SEL, NSInteger))objc_msgSend)(del, @selector(ConvertToNormalContactSection:), 0);
-        } @catch (NSException *e) { firstLetter = 0; }
+        NSInteger firstLetter = WDCachedFirstLetter(tv, del);
         if (firstLetter > 1 && ip.section >= 0 && ip.section < firstLetter) {
             NSInteger lastSec = firstLetter - 1;
-            NSInteger lastRows = 0;
-            @try { lastRows = [tv numberOfRowsInSection:lastSec]; } @catch (NSException *e) { lastRows = 1; }
+            NSInteger lastRows = WDCachedRows(tv, lastSec);
             BOOL first = (ip.section == 0 && ip.row == 0);
             BOOL last = (ip.section == lastSec && ip.row == lastRows - 1);
             if (first && last) return 15;
@@ -248,8 +368,7 @@ static NSUInteger WDSectionCornersAt(UITableView *tv, NSIndexPath *ip) {
             return 0;
         }
     }
-    NSInteger rows = 0;
-    @try { rows = [tv numberOfRowsInSection:ip.section]; } @catch (NSException *e) { return 15; }
+    NSInteger rows = WDCachedRows(tv, ip.section);
     if (rows <= 1) return 15;
     if (ip.row == 0) return (kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
     if (ip.row == rows - 1) return (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner);
@@ -311,6 +430,47 @@ static void WDClearFillViews(UIView *v, int depth) {
     }
 }
 
+static void WDNudgeInner(UIView *v, CGFloat dx) {
+    if (!v || fabs(dx) < 0.5) return;
+    NSValue *saved = objc_getAssociatedObject(v, kWDOrigTFKey);
+    CGAffineTransform want = CGAffineTransformMakeTranslation(dx, 0);
+    if (saved) {
+        if (fabs(v.transform.tx - dx) < 0.25) return;
+    } else {
+        objc_setAssociatedObject(v, kWDOrigTFKey, [NSValue valueWithCGAffineTransform:v.transform], WD_ASSOC);
+    }
+    if (!CGAffineTransformEqualToTransform(v.transform, want)) v.transform = want;
+}
+
+static void WDClearNudge(UIView *v) {
+    if (!v) return;
+    NSValue *orig = objc_getAssociatedObject(v, kWDOrigTFKey);
+    if (!orig) return;
+    v.transform = [orig CGAffineTransformValue];
+    objc_setAssociatedObject(v, kWDOrigTFKey, nil, WD_ASSOC);
+}
+
+static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
+    if (!cell || inset < 4) return;
+    CGFloat pad = MIN(6.0, inset * 0.35);
+    UIView *cv = cell.contentView ?: cell;
+    for (UIView *sub in cv.subviews) {
+        const char *nm = class_getName(object_getClass(sub));
+        if (!nm) continue;
+        if (!(strstr(nm, "MainFrameItemView") || strstr(nm, "ContactsItemView") || strstr(nm, "FakeMainFrame"))) continue;
+        @try {
+            id head = [sub valueForKey:@"m_frameHeadView"];
+            if (![head isKindOfClass:[UIView class]]) head = [sub valueForKey:@"m_headImageView"];
+            if ([head isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)head, pad);
+        } @catch (NSException *e) {}
+        @try {
+            id time = [sub valueForKey:@"m_timeLabel"];
+            if ([time isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)time, -pad);
+        } @catch (NSException *e) {}
+        return;
+    }
+}
+
 static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL showSep, BOOL punch, BOOL asCellBg) {
     WDCardPlate *plate = objc_getAssociatedObject(host, kWDPlateKey);
     if (![plate isKindOfClass:[WDCardPlate class]]) {
@@ -355,16 +515,16 @@ static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat rad
     plate.punch = punch;
     plate.showSep = showSep;
     if (punch) {
-        UIColor *gap = WDGapFillForView(host);
-        plate.fill.fillColor = gap.CGColor;
+        plate.fill.fillColor = WDGapFillForView(host).CGColor;
     } else {
-        plate.fill.fillColor = WDCardFill().CGColor;
+        plate.fill.fillColor = WDResolvedIn().CGColor;
     }
     if (changed) [plate redraw];
 }
 
 void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!view) return;
+    if (WDStyleShouldSkip(view)) return;
     if ([view isKindOfClass:[UITableViewCell class]]) {
         WDStyleCell((UITableViewCell *)view, inset, radius, continuous, tag);
         return;
@@ -393,33 +553,8 @@ void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
     (void)continuous;
 }
 
-void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
-    if (!view) return;
-    CGRect bounds = view.bounds;
-    if (bounds.size.width < 24 || bounds.size.height < 8) return;
-    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
-    if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
-        UIColor *oc = view.backgroundColor;
-        objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
-    }
-    view.backgroundColor = [UIColor clearColor];
-    view.opaque = NO;
-
-    CGFloat inx = MAX(0, inset);
-    if (inx > 0 && bounds.size.width <= inx * 2 + 24) inx = 0;
-
-    UIView *inner = nil;
-    for (UIView *s in view.subviews) {
-        const char *nm = class_getName(object_getClass(s));
-        if (nm && (strstr(nm, "SearchBox") || strstr(nm, "searchBox") || strstr(nm, "SearchText"))) {
-            inner = s; break;
-        }
-    }
-    if (!inner) {
-        for (UIView *s in view.subviews) {
-            if (s.bounds.size.width > bounds.size.width * 0.5 && s.bounds.size.height > 20) { inner = s; break; }
-        }
-    }
+static UIView *WDSearchInnerBox(UIView *view) {
+    if (!view) return nil;
     UIView *container = nil;
     @try {
         id box = [view valueForKey:@"searchBoxContainer"];
@@ -431,22 +566,50 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
             if ([box isKindOfClass:[UIView class]]) container = (UIView *)box;
         } @catch (NSException *e) {}
     }
-    if (!container) container = inner;
-
-    if (container && container != view) {
-        WDStyleRound(container, radius, continuous, tag);
-        container.clipsToBounds = YES;
-        container.layer.masksToBounds = YES;
-        // 首页搜索是两层：外层 searchBoxContainer 负责圆角，内层 searchBox 跟外层对齐。
-        for (UIView *s in container.subviews) {
-            if (s.bounds.size.width > container.bounds.size.width * 0.6) {
-                WDStyleRound(s, radius, continuous, tag);
+    if (container) return container;
+    if ([view isKindOfClass:[UISearchBar class]]) {
+        @try {
+            id tf = nil;
+            if ([view respondsToSelector:@selector(getTextField)]) {
+                tf = ((id (*)(id, SEL))objc_msgSend)(view, @selector(getTextField));
+            }
+            if (![tf isKindOfClass:[UIView class]]) tf = [view valueForKey:@"searchField"];
+            if ([tf isKindOfClass:[UIView class]]) return (UIView *)tf;
+        } @catch (NSException *e) {}
+        for (UIView *sub in view.subviews) {
+            if ([sub isKindOfClass:[UITextField class]]) return sub;
+            for (UIView *c in sub.subviews) {
+                if ([c isKindOfClass:[UITextField class]]) return c;
             }
         }
-    } else {
-        WDStyleRound(view, radius, continuous, tag);
     }
-    if (inx > 0.5) WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+    for (UIView *sub in view.subviews) {
+        const char *nm = class_getName(object_getClass(sub));
+        if (nm && (strstr(nm, "SearchBox") || strstr(nm, "searchBox") || strstr(nm, "SearchText"))) return sub;
+    }
+    return nil;
+}
+
+void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
+    if (!view) return;
+    if (WDStyleShouldSkip(view)) return;
+    CGRect bounds = view.bounds;
+    if (bounds.size.width < 24 || bounds.size.height < 8) return;
+    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+    (void)inset;
+    UIView *box = WDSearchInnerBox(view);
+    if (box && box != view) {
+        WDStyleRound(box, radius, continuous, tag);
+        box.clipsToBounds = YES;
+        box.layer.masksToBounds = YES;
+        if (gColMaster && gInOn) {
+            UIColor *inC = WDResolvedIn();
+            if (inC) box.backgroundColor = inC;
+        }
+        return;
+    }
+    if ([view isKindOfClass:[UISearchBar class]]) return;
+    WDStyleRound(view, MIN(radius, view.bounds.size.height / 2.0), continuous, tag);
 }
 
 static void WDClearHeaderRecur(UIView *v, int depth) {
@@ -479,6 +642,7 @@ void WDStyleClearHeader(UIView *view) {
 
 void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!cell) return;
+    if (WDStyleShouldSkip(cell)) return;
     CGRect bounds = cell.bounds;
     if (bounds.size.width < 32 || bounds.size.height < 8) return;
 
@@ -486,14 +650,15 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
 
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
-    NSUInteger corners = ip ? WDSectionCornersAt(tv, ip) : WDSectionCorners(cell);
-    if (bounds.size.width < 24) return;
-
     if (!tv) {
         UIView *sv = cell.superview;
         while (sv && ![sv isKindOfClass:[UITableView class]]) sv = sv.superview;
         if ([sv isKindOfClass:[UITableView class]]) tv = (UITableView *)sv;
     }
+    if (tv && WDTableIsTagList(tv)) return;
+    NSUInteger corners = ip ? WDSectionCornersAt(tv, ip) : WDSectionCorners(cell);
+    if (bounds.size.width < 24) return;
+
     if (tv) WDPaintTableGap(tv, WDGapFillForView(tv));
 
     if (!objc_getAssociatedObject(cell, kWDOrigBgKey)) {
@@ -506,17 +671,19 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
     BOOL showSep = (corners == 0) || ((corners & (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner)) == 0);
     WDPlacePlate(cell, bounds, inx, radius, corners, showSep, YES, NO);
 
-    cell.backgroundColor = [UIColor clearColor];
-    cell.opaque = NO;
+    UIColor *inC = WDResolvedIn();
+    cell.backgroundColor = inC;
+    cell.opaque = YES;
     cell.contentView.backgroundColor = [UIColor clearColor];
     cell.clipsToBounds = NO;
     // 不改 contentView.frame / layoutMargins / 内部 ItemView.frame。
     if ([cell respondsToSelector:@selector(setBkgColor:)]) {
-        @try { [cell setValue:[UIColor clearColor] forKey:@"bkgColor"]; } @catch (NSException *e) {}
+        @try { [cell setValue:inC forKey:@"bkgColor"]; } @catch (NSException *e) {}
     }
     WDHideNativeSeparators(cell);
     WDClearFillViews(cell, 0);
     WDClearFillViews(cell.contentView, 0);
+    WDBalanceInner(cell, inx);
     (void)continuous;
 }
 
@@ -555,6 +722,7 @@ void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, N
     plate.inset = 0;
     plate.punch = NO;
     plate.showSep = NO;
+    plate.fill.fillColor = WDResolvedIn().CGColor;
     if (!CGRectEqualToRect(plate.frame, plateF)) plate.frame = plateF;
     if (changed) [plate redraw];
     cell.backgroundColor = [UIColor clearColor];
@@ -593,6 +761,17 @@ void WDStyleRevertView(UIView *view) {
         if ([objc_getAssociatedObject(cell, kWDInsetKey) boolValue]) {
             cell.contentView.frame = UIEdgeInsetsInsetRect(cell.bounds, UIEdgeInsetsZero);
             objc_setAssociatedObject(cell, kWDInsetKey, nil, WD_ASSOC);
+        }
+        UIView *cv = cell.contentView ?: cell;
+        for (UIView *s in cv.subviews) {
+            @try {
+                id head = [s valueForKey:@"m_frameHeadView"];
+                if ([head isKindOfClass:[UIView class]]) WDClearNudge((UIView *)head);
+            } @catch (NSException *e) {}
+            @try {
+                id time = [s valueForKey:@"m_timeLabel"];
+                if ([time isKindOfClass:[UIView class]]) WDClearNudge((UIView *)time);
+            } @catch (NSException *e) {}
         }
         WDRevertRound(cell.contentView);
         UIView *sv = cell.superview;

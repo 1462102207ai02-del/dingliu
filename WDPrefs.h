@@ -33,13 +33,25 @@ NSString *WDHexForColor(UIColor *c);
 - (void)reload;
 - (void)ping;
 
-// 四个 Tab 共用一份背景色（改一处，微信/通讯录/发现/我同步）
+// 卡片外背景色（页面/灰缝，覆盖旧「页面背景色」）
 - (BOOL)bgEnabled;
 - (void)setBgEnabled:(BOOL)on;
 - (NSString *)bgHexDark:(BOOL)dark;
 - (void)setBgHex:(NSString *)hex dark:(BOOL)dark;
 - (UIColor *)bgColorDark:(BOOL)dark;
 - (void)resetBg;
+
+- (BOOL)cardOutEnabled;
+- (void)setCardOutEnabled:(BOOL)on;
+- (NSString *)cardOutHexDark:(BOOL)dark;
+- (void)setCardOutHex:(NSString *)hex dark:(BOOL)dark;
+- (UIColor *)cardOutColorDark:(BOOL)dark;
+
+- (BOOL)cardInEnabled;
+- (void)setCardInEnabled:(BOOL)on;
+- (NSString *)cardInHexDark:(BOOL)dark;
+- (void)setCardInHex:(NSString *)hex dark:(BOOL)dark;
+- (UIColor *)cardInColorDark:(BOOL)dark;
 @end
 
 #endif

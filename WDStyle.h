@@ -18,5 +18,8 @@ void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, N
 int  WDStyleTagOf(UIView *view);
 void WDStyleRevertView(UIView *view);
 void WDStyleInvalidate(void);
+BOOL WDStyleShouldSkip(UIView *view);
+void WDStyleSyncColors(BOOL master, BOOL inOn, const char *inL, const char *inD,
+                       BOOL outOn, const char *outL, const char *outD);
 
 #endif

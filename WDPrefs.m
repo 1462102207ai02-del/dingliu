@@ -84,7 +84,8 @@ NSString *WDHexForColor(UIColor *c) {
             snap[name] = @([self enabledForClass:name def:items[i].defOn != 0]);
         }
         [_ud setObject:snap forKey:@"WD.master.savedOn"];
-        [_ud setBool:[self bgEnabled] forKey:@"WD.master.savedBg"];
+        [_ud setBool:[self cardOutEnabled] forKey:@"WD.master.savedBg"];
+        [_ud setBool:[self cardInEnabled] forKey:@"WD.master.savedCardIn"];
         [_ud setBool:self.continuous forKey:@"WD.master.savedCont"];
     } else if (v && !was) {
         NSDictionary *snap = [_ud dictionaryForKey:@"WD.master.savedOn"];
@@ -99,11 +100,15 @@ NSString *WDHexForColor(UIColor *c) {
         if ([_ud objectForKey:@"WD.master.savedBg"]) {
             [_ud setBool:[_ud boolForKey:@"WD.master.savedBg"] forKey:@"WD.bg.on"];
         }
+        if ([_ud objectForKey:@"WD.master.savedCardIn"]) {
+            [_ud setBool:[_ud boolForKey:@"WD.master.savedCardIn"] forKey:@"WD.card.in.on"];
+        }
         if ([_ud objectForKey:@"WD.master.savedCont"]) {
             [_ud setBool:[_ud boolForKey:@"WD.master.savedCont"] forKey:@"WD.continuous"];
         }
         [_ud removeObjectForKey:@"WD.master.savedOn"];
         [_ud removeObjectForKey:@"WD.master.savedBg"];
+        [_ud removeObjectForKey:@"WD.master.savedCardIn"];
         [_ud removeObjectForKey:@"WD.master.savedCont"];
     }
     [_ud setBool:v forKey:@"WD.master"];
@@ -280,7 +285,39 @@ NSString *WDHexForColor(UIColor *c) {
     [_ud removeObjectForKey:@"WD.bg.on"];
     [_ud removeObjectForKey:@"WD.bg.l"];
     [_ud removeObjectForKey:@"WD.bg.d"];
+    [_ud removeObjectForKey:@"WD.card.in.on"];
+    [_ud removeObjectForKey:@"WD.card.in.l"];
+    [_ud removeObjectForKey:@"WD.card.in.d"];
     [self ping];
+}
+
+- (BOOL)cardOutEnabled { return [self bgEnabled]; }
+- (void)setCardOutEnabled:(BOOL)on { [self setBgEnabled:on]; }
+- (NSString *)cardOutHexDark:(BOOL)dark { return [self bgHexDark:dark]; }
+- (void)setCardOutHex:(NSString *)hex dark:(BOOL)dark { [self setBgHex:hex dark:dark]; }
+- (UIColor *)cardOutColorDark:(BOOL)dark { return [self bgColorDark:dark]; }
+
+- (BOOL)cardInEnabled {
+    id v = [_ud objectForKey:@"WD.card.in.on"];
+    return v ? [v boolValue] : NO;
+}
+- (void)setCardInEnabled:(BOOL)on {
+    [_ud setBool:on forKey:@"WD.card.in.on"];
+    [self ping];
+}
+- (NSString *)cardInHexDark:(BOOL)dark {
+    return dark ? [_ud stringForKey:@"WD.card.in.d"] : [_ud stringForKey:@"WD.card.in.l"];
+}
+- (void)setCardInHex:(NSString *)hex dark:(BOOL)dark {
+    NSString *key = dark ? @"WD.card.in.d" : @"WD.card.in.l";
+    if (hex.length) [_ud setObject:hex forKey:key];
+    else [_ud removeObjectForKey:key];
+    [self ping];
+}
+- (UIColor *)cardInColorDark:(BOOL)dark {
+    UIColor *c = WDColorForHex([self cardInHexDark:dark]);
+    if (!c && dark) c = WDColorForHex([self cardInHexDark:NO]);
+    return c;
 }
 
 - (void)reload { /* NSUserDefaults 同进程即时可读 */ }

@@ -369,6 +369,7 @@
 
 @interface WDSettingsController ()
 @property (nonatomic, assign) BOOL pickingDark;
+@property (nonatomic, assign) BOOL pickingIn;
 @end
 
 @implementation WDSettingsController
@@ -384,8 +385,9 @@
     if (s == 0) return 1;
     if (s == 1) {
         WDPrefs *p = [WDPrefs shared];
-        NSInteger n = 4;
-        if (p.master && p.bgEnabled) n += 2;
+        NSInteger n = 5;
+        if (p.master && p.cardInEnabled) n += 2;
+        if (p.master && p.cardOutEnabled) n += 2;
         return n;
     }
     if (s == 2) return (NSInteger)WDPageCount;
@@ -401,7 +403,7 @@
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
     if (s == 0) return @"关掉后所有子开关显示为关，插件整体不生效；再开只恢复关掉前的状态。";
-    if (s == 1) return [NSString stringWithFormat:@"%@ v%@  ·  开关和数值改完立刻生效。打开页面背景色后出现浅色 / 深色两项。", WD_DISPLAY_NAME, WD_VERSION];
+    if (s == 1) return [NSString stringWithFormat:@"%@ v%@  ·  开关和数值改完立刻生效。卡片内/外背景色覆盖所有页面。打开后展开浅色 / 深色预览。", WD_DISPLAY_NAME, WD_VERSION];
     if (s == 2) return @"按微信页面顺序分类，点进去只看到该页的元素。子开关受总开关控制。";
     return @"导出为 plist。恢复配置可从文件 App / 隔空投送选择外部 plist。";
 }
@@ -437,6 +439,14 @@
     }
 
     WDCell *c = [self wdCell:tv ident:@"g" style:UITableViewCellStyleValue1];
+    BOOL inOn = master && p.cardInEnabled;
+    BOOL outOn = master && p.cardOutEnabled;
+    NSInteger inSw = 3;
+    NSInteger inLight = inOn ? 4 : -1;
+    NSInteger inDark = inOn ? 5 : -1;
+    NSInteger outSw = 4 + (inOn ? 2 : 0);
+    NSInteger outLight = outOn ? outSw + 1 : -1;
+    NSInteger outDark = outOn ? outSw + 2 : -1;
     if (ip.row == 0) {
         c.textLabel.text = @"连续曲率";
         [self wdSwitch:c action:@selector(contChanged:) on:(master && p.continuous) enabled:master];
@@ -450,13 +460,17 @@
         [self wdNumber:c value:[NSString stringWithFormat:@"%.0f", p.globalInset]
            placeholder:@"12" tag:2];
         c.num.enabled = master;
-    } else if (ip.row == 3) {
-        c.textLabel.text = @"页面背景色";
-        [self wdSwitch:c action:@selector(bgChanged:) on:(master && p.bgEnabled) enabled:master];
+    } else if (ip.row == inSw) {
+        c.textLabel.text = @"卡片内背景色";
+        [self wdSwitch:c action:@selector(cardInChanged:) on:inOn enabled:master];
+    } else if (ip.row == outSw) {
+        c.textLabel.text = @"卡片外背景色";
+        [self wdSwitch:c action:@selector(cardOutChanged:) on:outOn enabled:master];
     } else {
-        BOOL dark = (ip.row == 5);
+        BOOL isIn = (ip.row == inLight || ip.row == inDark);
+        BOOL dark = (ip.row == inDark || ip.row == outDark);
         c.textLabel.text = dark ? @"深色模式" : @"浅色模式";
-        NSString *hex = [p bgHexDark:dark];
+        NSString *hex = isIn ? [p cardInHexDark:dark] : [p cardOutHexDark:dark];
         c.detailTextLabel.text = nil;
         [self wdDot:c color:WDColorForHex(hex)];
         c.accessoryType = UITableViewCellAccessoryNone;
@@ -469,10 +483,25 @@
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
-    if (ip.section == 1 && ip.row >= 4) {
+    if (ip.section == 1 && ip.row >= 3) {
         if (![WDPrefs shared].master) return;
-        self.pickingDark = (ip.row == 5);
-        [self openPicker];
+        WDPrefs *pp = [WDPrefs shared];
+        BOOL inOn = pp.cardInEnabled;
+        BOOL outOn = pp.cardOutEnabled;
+        NSInteger inLight = inOn ? 4 : -1;
+        NSInteger inDark = inOn ? 5 : -1;
+        NSInteger outSw = 4 + (inOn ? 2 : 0);
+        NSInteger outLight = outOn ? outSw + 1 : -1;
+        NSInteger outDark = outOn ? outSw + 2 : -1;
+        if (ip.row == inLight || ip.row == inDark) {
+            self.pickingIn = YES;
+            self.pickingDark = (ip.row == inDark);
+            [self openPicker];
+        } else if (ip.row == outLight || ip.row == outDark) {
+            self.pickingIn = NO;
+            self.pickingDark = (ip.row == outDark);
+            [self openPicker];
+        }
         return;
     }
     if (ip.section == 2) {
@@ -557,9 +586,14 @@
     if (![WDPrefs shared].master) return;
     [WDPrefs shared].continuous = sw.on;
 }
-- (void)bgChanged:(UISwitch *)sw {
+- (void)cardInChanged:(UISwitch *)sw {
     if (![WDPrefs shared].master) return;
-    [[WDPrefs shared] setBgEnabled:sw.on];
+    [[WDPrefs shared] setCardInEnabled:sw.on];
+    [self.tableView reloadData];
+}
+- (void)cardOutChanged:(UISwitch *)sw {
+    if (![WDPrefs shared].master) return;
+    [[WDPrefs shared] setCardOutEnabled:sw.on];
     [self.tableView reloadData];
 }
 - (void)wdNumberDone:(UITextField *)f {
@@ -582,24 +616,29 @@
         UIColorPickerViewController *vc = [[UIColorPickerViewController alloc] init];
         vc.delegate = self;
         vc.supportsAlpha = YES;
-        vc.title = self.pickingDark ? @"深色模式背景" : @"浅色模式背景";
-        UIColor *cur = WDColorForHex([p bgHexDark:self.pickingDark]);
+        vc.title = self.pickingIn
+            ? (self.pickingDark ? @"卡片内 · 深色" : @"卡片内 · 浅色")
+            : (self.pickingDark ? @"卡片外 · 深色" : @"卡片外 · 浅色");
+        NSString *hex = self.pickingIn ? [p cardInHexDark:self.pickingDark] : [p cardOutHexDark:self.pickingDark];
+        UIColor *cur = WDColorForHex(hex);
         if (cur) vc.selectedColor = cur;
         [self presentViewController:vc animated:YES completion:nil];
         return;
     }
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"背景色"
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:self.pickingIn ? @"卡片内背景色" : @"卡片外背景色"
                                                                message:@"填写 #RRGGBB 或 #AARRGGBB"
                                                         preferredStyle:UIAlertControllerStyleAlert];
     [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.text = [[WDPrefs shared] bgHexDark:self.pickingDark] ?: @"";
+        WDPrefs *pp = [WDPrefs shared];
+        tf.text = (self.pickingIn ? [pp cardInHexDark:self.pickingDark] : [pp cardOutHexDark:self.pickingDark]) ?: @"";
         tf.placeholder = @"#RRGGBB";
     }];
     __weak typeof(self) ws = self;
     [a addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act) {
         (void)act;
         NSString *t = a.textFields.firstObject.text ?: @"";
-        [[WDPrefs shared] setBgHex:t dark:ws.pickingDark];
+        if (ws.pickingIn) [[WDPrefs shared] setCardInHex:t dark:ws.pickingDark];
+        else [[WDPrefs shared] setCardOutHex:t dark:ws.pickingDark];
         [ws.tableView reloadData];
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
@@ -608,12 +647,17 @@
 
 - (void)colorPickerViewControllerDidSelectColor:(UIColorPickerViewController *)vc {
     NSString *hex = WDHexForColor(vc.selectedColor);
-    if (hex) [[WDPrefs shared] setBgHex:hex dark:self.pickingDark];
+    if (!hex) return;
+    if (self.pickingIn) [[WDPrefs shared] setCardInHex:hex dark:self.pickingDark];
+    else [[WDPrefs shared] setCardOutHex:hex dark:self.pickingDark];
 }
 
 - (void)colorPickerViewControllerDidFinish:(UIColorPickerViewController *)vc {
     NSString *hex = WDHexForColor(vc.selectedColor);
-    if (hex) [[WDPrefs shared] setBgHex:hex dark:self.pickingDark];
+    if (hex) {
+        if (self.pickingIn) [[WDPrefs shared] setCardInHex:hex dark:self.pickingDark];
+        else [[WDPrefs shared] setCardOutHex:hex dark:self.pickingDark];
+    }
     [self.tableView reloadData];
 }
 
