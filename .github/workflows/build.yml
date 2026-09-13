@@ -1,0 +1,72 @@
+name: Build dingliu
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos & SDK
+        run: |
+          export THEOS=$HOME/theos
+          git clone --depth=1 https://github.com/theos/theos.git $THEOS
+          git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: Install ldid
+        run: |
+          git clone --depth=1 https://github.com/ProcursusTeam/ldid.git /tmp/ldid
+          cd /tmp/ldid
+          make -j$(nproc) ldid
+          sudo cp ./ldid /usr/local/bin/ldid
+          sudo chmod +x /usr/local/bin/ldid
+          ldid -V || true
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip
+
+      - name: Build (rootless)
+        run: |
+          cd $GITHUB_WORKSPACE
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+          ls -la packages/ || true
+          ls -la .theos/obj/ || true
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp packages/*.deb dist/ 2>/dev/null || true
+          cp .theos/obj/dingliu.dylib dist/dingliu.dylib 2>/dev/null || \
+            cp .theos/obj/debug/dingliu.dylib dist/dingliu.dylib 2>/dev/null || true
+          cd dist && zip -r dingliu-trollfools-dylib.zip dingliu.dylib && cd ..
+          ls -la dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dingliu-build
+          path: dist/*
+
+      - name: Create / Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: dingliu v1.0.0 (你啊爸支鼎溜)
+          body: |
+            微信 8.0.70+ 圆角美化插件
+            - `com.dingliu.wechat_1.0.0_iphoneos-arm64.deb` — rootless 越狱（Dopamine/palera1n rootless）安装包
+            - `dingliu.dylib` / `dingliu-trollfools-dylib.zip` — TrollFools 注入用
+          files: |
+            dist/*.deb
+            dist/*.zip
+            dist/dingliu.dylib
+          fail_on_unmatched_files: false
