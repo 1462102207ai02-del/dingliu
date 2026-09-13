@@ -175,7 +175,13 @@ static void DLStoreOrig(Class c, SEL s, IMP orig) {
     [gOrigMap setObject:[NSValue valueWithPointer:orig] forKey:DLKeyFor(c, s)];
 }
 
-// 前置声明：DLIsOurImp 需要引用后面的手工 IMP
+// 前置声明：DLIsOurImp 需要引用后面定义的各 hook IMP
+static void DLLayoutIMP(id self, SEL _cmd);
+static void DLFrameIMP(id self, SEL _cmd, CGRect f);
+static id DLGetterIMP(id self, SEL _cmd);
+static void DLSetColorIMP(id self, SEL _cmd, UIColor *c);
+static void DLSetViewIMP(id self, SEL _cmd, UIView *arg);
+static void DLHomeTableIMP(id self, SEL _cmd);
 static void DLSearchBarLayoutIMP(id self, SEL _cmd);
 static void DLLayerBorderIMP(id self, SEL _cmd, CGFloat w);
 
