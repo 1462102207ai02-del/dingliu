@@ -1,8 +1,8 @@
-name: Build dingliu
+name: Build WechatDuo
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, wechatduo ]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,6 @@ jobs:
           set -o pipefail
           mkdir -p /tmp/logs
           sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip ldid 2>&1 | tee /tmp/logs/apt.log || true
-          which ldid || echo "no apt ldid"
 
       - name: Install Theos, toolchain & SDK
         run: |
@@ -35,18 +34,15 @@ jobs:
             done
             [ -d $THEOS/.git ] || { echo "::error::theos clone failed after retries"; exit 1; }
             sudo apt-get install -y libtinfo6 xz-utils || true
-            # iOS cross toolchain (official install-theos method, non-swift)
             if [ ! -x $THEOS/toolchain/linux/iphone/bin/clang ]; then
               mkdir -p $THEOS/toolchain
               for i in 1 2 3; do
                 curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz -o /tmp/tc.tar.xz && break
                 echo "toolchain dl attempt $i failed"; sleep 5
               done
-              ls -la /tmp/tc.tar.xz
               tar -xJf /tmp/tc.tar.xz -C $THEOS/toolchain/
             fi
             [ -x $THEOS/toolchain/linux/iphone/bin/clang ] || { echo "::error::toolchain clang missing"; exit 1; }
-            # patched SDK (official install-sdk, with retry + clone fallback)
             if ! ls $THEOS/sdks/ 2>/dev/null | grep -q sdk; then
               for i in 1 2 3; do
                 $THEOS/bin/install-sdk latest && break || { echo "install-sdk attempt $i failed"; sleep 8; }
@@ -57,7 +53,6 @@ jobs:
               git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks || true
             fi
             ls $THEOS/sdks/ 2>/dev/null | grep -q sdk || { echo "::error::no SDK available"; exit 1; }
-            ls $THEOS/sdks/ | head
             $THEOS/toolchain/linux/iphone/bin/clang --version | head -2
             echo "THEOS=$THEOS" >> $GITHUB_ENV
           } 2>&1 | tee /tmp/logs/theos.log
@@ -68,8 +63,6 @@ jobs:
           mkdir -p /tmp/logs
           {
             set -e
-            # 无条件用 ProcursusTeam 最新预编译 ldid 覆盖（apt 的旧版 ldid
-            # 对含 chained fixups 的 Mach-O 重签会写出乱码签名偏移）
             for i in 1 2 3; do
               curl -fL --retry 3 -o /tmp/ldid_bin https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64 && break
               echo "curl attempt $i failed"; sleep 5
@@ -99,74 +92,43 @@ jobs:
           {
             set -e
             mkdir -p dist
-            # 关键修复：Theos 在 Linux 产出的伪签名 LC_CODE_SIGNATURE 是坏的
-            #（偏移/大小为乱码），dyld 强加载校验签名失败 → 秒闪退无日志。
-            # 必须去签 + 重签 + 程序化校验。
-            # 关键修复：Theos/ldid 对此类文件产出的伪签名 LC_CODE_SIGNATURE 是坏的
-            #（偏移/大小为乱码，ldid 重签只追加 blob 不写 LC），dyld 强加载校验
-            # 签名失败 → 秒闪退无日志。改用自研 adhoc 签名器全程可控。
-            python3 tools/macho_info.py .theos/obj/dingliu.dylib || true
-            # 重签：Theos/Linux 的伪签名 LC 是坏的，ldid 又只追加 blob 不回写 LC。
-            # 必须用自研签名器（v2）：原地覆写 LC、只增长 __LINKEDIT、页哈希零填充。
-            # 绝对不能从 load commands 区删字节——__TEXT fileoff=0，删了会把所有
-            # 段内容整体前移、偏移全错位。
-            python3 tools/adhoc_sign.py .theos/obj/dingliu.dylib dingliu
-            python3 tools/verify_sig.py .theos/obj/dingliu.dylib
-            python3 tools/macho_info.py .theos/obj/dingliu.dylib
-            # 用重签后的 dylib 重建 deb（包内 dylib 同样有效，并重算 md5sums）
-            rm -rf /tmp/debx && mkdir -p /tmp/debx
-            dpkg-deb -R packages/*.deb /tmp/debx
-            DEBDY=$(find /tmp/debx -name dingliu.dylib -type f | head -1)
-            if [ -n "$DEBDY" ]; then
-              cp .theos/obj/dingliu.dylib "$DEBDY"
-              ( cd /tmp/debx && find . -type f ! -path "./DEBIAN/*" -exec md5sum {} \; \
-                | sed 's|  \./|  |' > DEBIAN/md5sums )
-              rm -f packages/*.deb
-              dpkg-deb -Zxz -b /tmp/debx packages/com.dingliu.wechat.deb
-            fi
-            cp packages/com.dingliu.wechat.deb dist/com.dingliu.wechat_1.0.4_iphoneos-arm64.deb
-            cp .theos/obj/dingliu.dylib dist/dingliu.dylib
-            python3 tools/verify_sig.py dist/dingliu.dylib
-            ( cd dist && zip -q -r dingliu-trollfools-dylib.zip dingliu.dylib )
+            python3 tools/macho_info.py .theos/obj/WechatDuo.dylib || true
+            python3 tools/adhoc_sign.py .theos/obj/WechatDuo.dylib WechatDuo
+            python3 tools/verify_sig.py .theos/obj/WechatDuo.dylib
+            python3 tools/macho_info.py .theos/obj/WechatDuo.dylib
+            cp .theos/obj/WechatDuo.dylib dist/WechatDuo.dylib
+            python3 tools/verify_sig.py dist/WechatDuo.dylib
+            ( cd dist && zip -q -r WechatDuo-trollfools-dylib.zip WechatDuo.dylib )
             ls -la dist/
           } 2>&1 | tee /tmp/logs/collect.log
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dingliu-build
+          name: WechatDuo-build
           path: dist/*
 
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.4
-          name: dingliu v1.0.4 (你啊爸支鼎溜)
+          tag_name: v1.0.0
+          name: WechatDuo v1.0.0
           body: |
-            微信 8.0.70+ 圆角美化插件（rootless 越狱 / TrollFools 通用）
+            微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
-            - **v1.0.4 关键修复（TrollFools 注入不进去）**：自研签名器有两个致命 bug
-              —— ① 把 `__LINKEDIT` 的 *fileoff* 当 filesize 改，段表塌到和 `__TEXT` 重叠；
-              ② 删 `LC_CODE_SIGNATURE` 时按 24 字节删（实际是 16 字节的
-              `linkedit_data_command`），导致 `__TEXT`(fileoff=0) 之后的所有段内容整体前移 8 字节。
-              两者叠加让 ChOma 判定结构损坏，TrollFools 报
-              `Error: no code signature found`。现在改为原地覆写 LC、只增长
-              `__LINKEDIT` filesize/vmsize、页哈希按 codesign 语义零填充，
-              并新增严格校验（段重叠 / 签名是否落在 `__LINKEDIT` 内 / 逐页哈希重算）。
-            - 依赖 `firmware (>= 15.0)` 改为 `14.0`，与 `minos 14.0` 对齐
-            - v1.0.3: 最低系统降到 iOS 14.0；新增启动日志与崩溃兜底
-            - v1.0.2: 修复 hook 父子类自我递归栈溢出
-            - v1.0.1: 接入「插件收纳」入口（MinimizeViewController -> WCPluginsMgr），过滤 4 个微信 bundle id
+            - 顶栏 / 底栏 / 横幅 / 列表 / 搜索 / 输入 / 气泡 / 弹层 / 视频号 / 钱包
+            - 每个类有中文简称，可单独开关、圆角、双侧缩进
+            - 接入插件收纳（MinimizeViewController → WCPluginsMgr）
+            - Bundle ID：com.tencent.xin / com.tencent.qy.xin / com.tencent.mm.xin / com.tencent.wx
+            - iOS 14.0+
 
-            - `com.dingliu.wechat_1.0.4_iphoneos-arm64.deb` — rootless 越狱（Dopamine / palera1n rootless）安装包
-            - `dingliu.dylib` / `dingliu-trollfools-dylib.zip` — TrollFools 注入用
-
-            注入后若仍异常：微信沙盒 `Documents/dingliu.log` 有启动日志；
-            安全模式 `defaults write com.tencent.xin DLSafeMode -bool YES`。
+            注入：TrollFools 选择微信 → 注入 `WechatDuo.dylib` → 重启微信。
+            设置入口：微信「我」页底部，或插件收纳里的 **WechatDuo**。
+            日志：微信沙盒 `Documents/WechatDuo.log`
+            安全模式：`defaults write com.tencent.xin WDSafeMode -bool YES`
           files: |
-            dist/*.deb
-            dist/*.zip
-            dist/dingliu.dylib
+            dist/WechatDuo.dylib
+            dist/WechatDuo-trollfools-dylib.zip
           fail_on_unmatched_files: false
 
       - name: Upload failure logs to Release
@@ -178,4 +140,3 @@ jobs:
           tag="ci-logs-${{ github.run_id }}"
           gh release create "$tag" --title "$tag" --notes "CI failure logs (auto)" 2>/dev/null || true
           gh release upload "$tag" /tmp/logs/* --clobber || echo "log upload failed"
-          gh release view "$tag" --json assets 2>/dev/null || true

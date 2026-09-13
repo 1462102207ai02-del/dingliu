@@ -4,10 +4,10 @@ ARCHS = arm64
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = dingliu
-dingliu_FILES = Tweak.m
-dingliu_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore
-dingliu_CFLAGS = -fobjc-arc -Wno-unused-variable -Wno-unused-function -Wno-deprecated-declarations
-dingliu_LDFLAGS = -Wl,-undefined,dynamic_lookup
+TWEAK_NAME = WechatDuo
+WechatDuo_FILES = Tweak.m WDCatalog.m WDPrefs.m WDStyle.m WDSettings.m
+WechatDuo_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore
+WechatDuo_CFLAGS = -fobjc-arc -Wno-unused-variable -Wno-unused-function -Wno-deprecated-declarations
+WechatDuo_LDFLAGS = -Wl,-undefined,dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk

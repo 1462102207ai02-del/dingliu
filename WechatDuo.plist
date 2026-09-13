@@ -6,10 +6,10 @@
 	<dict>
 		<key>Bundles</key>
 		<array>
-			<string>com.tencent.qy.xin</string>
-			<string>com.tencent.wx</string>
-			<string>com.tencent.mm.xin</string>
 			<string>com.tencent.xin</string>
+			<string>com.tencent.qy.xin</string>
+			<string>com.tencent.mm.xin</string>
+			<string>com.tencent.wx</string>
 		</array>
 	</dict>
 </dict>
