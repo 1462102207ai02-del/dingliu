@@ -108,12 +108,12 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.1
-          name: dingliu v1.0.1 (你啊爸支鼎溜)
+          tag_name: v1.0.2
+          name: dingliu v1.0.2 (你啊爸支鼎溜)
           body: |
             微信 8.0.70+ 圆角美化插件
             - v1.0.1: 接入「插件收纳」入口（MinimizeViewController -> WCPluginsMgr），过滤 4 个微信 bundle id
-            - `com.dingliu.wechat_1.0.1_iphoneos-arm64.deb` — rootless 越狱（Dopamine/palera1n rootless）安装包
+            - `com.dingliu.wechat_1.0.2_iphoneos-arm64.deb` — rootless 越狱（Dopamine/palera1n rootless）安装包
             - `dingliu.dylib` / `dingliu-trollfools-dylib.zip` — TrollFools 注入用
           files: |
             dist/*.deb

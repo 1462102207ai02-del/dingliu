@@ -38,7 +38,7 @@ static NSString * const kFullWidth       = @"DLFullWidthCells";      // 单元�
 static NSString * const kCleanBorders    = @"DLCleanSystemBorders";  // 清除系统自带描边
 
 static NSString * const kDisplayName     = @"你啊爸支鼎溜";
-static NSString * const kVersionString    = @"1.0.1";
+static NSString * const kVersionString    = @"1.0.2";
 
 // hook kind
 enum {
@@ -159,8 +159,12 @@ static NSString *DLKeyFor(Class c, SEL s) {
 
 static IMP DLOrigIMP(id self, SEL _cmd) {
     if (!gOrigMap) return NULL;
-    NSValue *v = [gOrigMap objectForKey:DLKeyFor(object_getClass(self), _cmd)];
-    return v ? (IMP)[v pointerValue] : NULL;
+    // 沿继承链回溯：子类实例调用父类挂的 hook 时，也要能找到 orig
+    for (Class c = object_getClass(self); c; c = class_getSuperclass(c)) {
+        NSValue *v = [gOrigMap objectForKey:DLKeyFor(c, _cmd)];
+        if (v) return (IMP)[v pointerValue];
+    }
+    return NULL;
 }
 
 static void DLStoreOrig(Class c, SEL s, IMP orig) {
@@ -171,12 +175,29 @@ static void DLStoreOrig(Class c, SEL s, IMP orig) {
     [gOrigMap setObject:[NSValue valueWithPointer:orig] forKey:DLKeyFor(c, s)];
 }
 
-/// 替换实例方法实现；方法不存在时返回 NO
+// 前置声明：DLIsOurImp 需要引用后面的手工 IMP
+static void DLSearchBarLayoutIMP(id self, SEL _cmd);
+static void DLLayerBorderIMP(id self, SEL _cmd, CGFloat w);
+
+/// 判断某个 IMP 是否是我们自己的 hook 实现。
+/// 关键防崩溃逻辑：hook 表里有父子类对（UITableView/MMTableView、UIButton/FixTitleColorButton 等）。
+/// 父类挂完后，class_getInstanceMethod(子类, sel) 返回的是继承来的「已替换」实现；
+/// 若不检测直接再挂，orig 会存成我们自己的 hook → 调自己 → 无限递归栈溢出 → 启动即闪退。
+static BOOL DLIsOurImp(IMP imp) {
+    if (!imp) return NO;
+    return imp == (IMP)DLLayoutIMP || imp == (IMP)DLFrameIMP || imp == (IMP)DLGetterIMP
+        || imp == (IMP)DLSetColorIMP || imp == (IMP)DLSetViewIMP || imp == (IMP)DLHomeTableIMP
+        || imp == (IMP)DLSearchBarLayoutIMP || imp == (IMP)DLLayerBorderIMP;
+}
+
+/// 替换实例方法实现；方法不存在或已被本插件挂过（含继承自父类）时返回 NO
 static BOOL DLSwizzle(Class c, SEL s, IMP newImp) {
     if (!c) return NO;
     Method m = class_getInstanceMethod(c, s);
     if (!m) return NO;
-    DLStoreOrig(c, s, method_getImplementation(m));
+    IMP cur = method_getImplementation(m);
+    if (DLIsOurImp(cur)) return NO;   // 父类已挂：跳过子类条目，避免自我递归
+    DLStoreOrig(c, s, cur);
     method_setImplementation(m, newImp);
     return YES;
 }
@@ -500,7 +521,6 @@ static const DLEntry gTable[] = {
     {"AppUrlMessageCellViewClassic",        "layoutSubviews",               DL_KIND_LAYOUT, DL_GROUP_BUBBLE},
     {"AppUrlMessageImageView",              "layoutSubviews",               DL_KIND_LAYOUT, DL_GROUP_BUBBLE},
     {"MsgMediaGroupCard",                   "layoutSubviews",               DL_KIND_LAYOUT, DL_GROUP_BUBBLE},
-    {"UISearchBar",                         "layoutSubviews",               DL_KIND_LAYOUT, DL_GROUP_SYSTEM},
     {"UISearchBar",                         "didMoveToWindow",              DL_KIND_LAYOUT, DL_GROUP_SYSTEM},
 };
 
@@ -584,7 +604,7 @@ static void DLPushSettings(void) {
 }
 
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
-    if (s == 4) return [NSString stringWithFormat:@"%@ v1.0.0 — 适配微信 8.0.70+，rootless / TrollFools 通用。改动保存后回到页面自动生效。", kDisplayName];
+    if (s == 4) return [NSString stringWithFormat:@"%@ v1.0.2 — 适配微信 8.0.70+，rootless / TrollFools 通用。改动保存后回到页面自动生效。", kDisplayName];
     return nil;
 }
 
@@ -844,52 +864,62 @@ static void dingliu_init(void) {
     @autoreleasepool {
         DLRegisterDefaults();
 
-        // 数据驱动 hook 表
-        IMP impTable[6] = {
-            (IMP)DLLayoutIMP, (IMP)DLFrameIMP, (IMP)DLGetterIMP,
-            (IMP)DLSetColorIMP, (IMP)DLSetViewIMP, (IMP)DLHomeTableIMP
-        };
-        int installed = 0;
-        for (int i = 0; i < gTableCount; i++) {
-            const DLEntry *e = &gTable[i];
-            Class c = NSClassFromString(@(e->cls));
-            if (!c) continue;                                  // 类名守卫：新版微信改名/删除则跳过
-            if (e->group == DL_GROUP_SYSTEM && !DLEnableSystem()) continue;
-            SEL s = sel_registerName(e->sel);
-            if (DLSwizzle(c, s, impTable[e->kind])) installed++;
-        }
+        @try {
+            if (DLOn(@"DLSafeMode", NO)) {
+                // 安全模式：跳过所有外观 hook，只装设置入口，便于救砖
+                NSLog(@"[dingliu] SAFE MODE: cosmetic hooks skipped");
+            } else {
+                // 数据驱动 hook 表
+                IMP impTable[6] = {
+                    (IMP)DLLayoutIMP, (IMP)DLFrameIMP, (IMP)DLGetterIMP,
+                    (IMP)DLSetColorIMP, (IMP)DLSetViewIMP, (IMP)DLHomeTableIMP
+                };
+                int installed = 0;
+                for (int i = 0; i < gTableCount; i++) {
+                    const DLEntry *e = &gTable[i];
+                    Class c = NSClassFromString(@(e->cls));
+                    if (!c) continue;                                  // 类名守卫：新版微信改名/删除则跳过
+                    if (e->group == DL_GROUP_SYSTEM && !DLEnableSystem()) continue;
+                    SEL s = sel_registerName(e->sel);
+                    if (DLSwizzle(c, s, impTable[e->kind])) installed++;
+                }
 
-        // 搜索框特判
-        for (NSString *n in @[@"WCSearchBar", @"UISearchBar", @"MMUISearchBar", @"FavSearchBar"]) {
-            Class c = NSClassFromString(n);
-            if (c) DLSwizzle(c, @selector(layoutSubviews), (IMP)DLSearchBarLayoutIMP);
-        }
+                // 搜索框特判（UISearchBar 本体不进数据表，由这里统一处理，避免双重 hook）
+                for (NSString *n in @[@"WCSearchBar", @"UISearchBar", @"MMUISearchBar"]) {
+                    Class c = NSClassFromString(n);
+                    if (c) DLSwizzle(c, @selector(layoutSubviews), (IMP)DLSearchBarLayoutIMP);
+                }
 
-        // UITableViewCell 分组圆角 API（原首页包用 class_addMethod 添加）
-        Class cellCls = NSClassFromString(@"UITableViewCell");
-        SEL selRGC = sel_registerName("_roundedGroupCornerRadius");
-        if (cellCls && !class_getInstanceMethod(cellCls, selRGC)) {
-            class_addMethod(cellCls, selRGC, (IMP)DLRoundedGroupCornerRadiusIMP, "d@:");
-        }
+                // UITableViewCell 分组圆角 API（原首页包用 class_addMethod 添加）
+                Class cellCls = NSClassFromString(@"UITableViewCell");
+                SEL selRGC = sel_registerName("_roundedGroupCornerRadius");
+                if (cellCls && !class_getInstanceMethod(cellCls, selRGC)) {
+                    class_addMethod(cellCls, selRGC, (IMP)DLRoundedGroupCornerRadiusIMP, "d@:");
+                }
 
-        // CALayer 描边清理（可选）
-        Class layerCls = NSClassFromString(@"CALayer");
-        if (layerCls) DLSwizzle(layerCls, @selector(setBorderWidth:), (IMP)DLLayerBorderIMP);
+                // CALayer 描边清理（可选）
+                Class layerCls = NSClassFromString(@"CALayer");
+                if (layerCls) DLSwizzle(layerCls, @selector(setBorderWidth:), (IMP)DLLayerBorderIMP);
 
-        // 设置入口
-        DLHookEntryPage(@"MoreViewController");
-        DLHookEntryPage(@"NewSettingViewController");
-
-        // 插件收纳接入：MinimizeViewController viewDidLoad 时注册入口
-        Class minCls = NSClassFromString(@"MinimizeViewController");
-        if (minCls) {
-            Method m = class_getInstanceMethod(minCls, @selector(viewDidLoad));
-            if (m) {
-                gOrigMinimizeViewDidLoad = method_getImplementation(m);
-                method_setImplementation(m, (IMP)DLMinimizeViewDidLoadIMP);
+                NSLog(@"[dingliu] 你啊爸支鼎溜 loaded");
             }
-        }
 
-        NSLog(@"[dingliu] 你啊爸支鼎溜 loaded: %d/%d hooks installed", installed, gTableCount);
+            // 设置入口（安全模式下也保留，方便关闭插件）
+            DLHookEntryPage(@"MoreViewController");
+            DLHookEntryPage(@"NewSettingViewController");
+
+            // 插件收纳接入：MinimizeViewController viewDidLoad 时注册入口
+            Class minCls = NSClassFromString(@"MinimizeViewController");
+            if (minCls) {
+                Method m = class_getInstanceMethod(minCls, @selector(viewDidLoad));
+                if (m) {
+                    gOrigMinimizeViewDidLoad = method_getImplementation(m);
+                    method_setImplementation(m, (IMP)DLMinimizeViewDidLoadIMP);
+                }
+            }
+        } @catch (NSException *e) {
+            // 构造阶段任何异常都不允许带崩微信
+            NSLog(@"[dingliu] init exception: %@ — %@", e.name, e.reason);
+        }
     }
 }

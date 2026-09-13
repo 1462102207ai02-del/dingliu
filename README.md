@@ -8,7 +8,7 @@ GitHub Actions 自动构建，产物在 Release / Artifacts：
 
 | 文件 | 用途 |
 |---|---|
-| `com.dingliu.wechat_1.0.1_iphoneos-arm64.deb` | rootless 越狱（Dopamine / palera1n rootless）安装 |
+| `com.dingliu.wechat_1.0.2_iphoneos-arm64.deb` | rootless 越狱（Dopamine / palera1n rootless）安装 |
 | `dingliu.dylib`（zip 同） | TrollFools 注入微信使用 |
 
 ## 本地构建（可选）
