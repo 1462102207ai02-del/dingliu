@@ -111,14 +111,20 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.3
-          name: WechatDuo v1.0.3
+          tag_name: v1.1.0
+          name: WechatDuo v1.1.0
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
-            - **v1.0.3**：修掉「hooks 装完即闪退」。97 个类共用一个 layout IMP，
-              按实例 class 找 orig，子类 super 会递归把栈打爆（无 SIGNAL 日志）。
-              现每类独立 block IMP；只替换本类已有 layoutSubviews；启动 2.5s 后才装饰。
+            - **v1.1.0**
+              - 设置项按页面顺序分类（首页/通讯录/发现/我/聊天/搜索/钱包/通用），不再一屏铺开上百项
+              - 设置页自身卡片化 + 圆角 + 双侧缩进
+              - 首页四个板块（微信/通讯录/发现/我）背景色支持浅色、深色分别自定义，使用系统原生取色器
+              - 数值一律改为输入框，不再使用滑杆
+              - 修掉「首页会话列表看不到缩进」：沿父类链找到真正实现 layoutSubviews 的类再挂载
+              - 卡片一体化：底板与 contentView 一起缩进
+              - 开关真实可逆：总开关或单类开关一关，立即还原已装饰的视图，不留残留
+            - **v1.0.3**：每类独立 layout IMP，禁止按实例 class 找 orig；启动后再装饰。
             - **v1.0.2**：constructor 延迟；不 hook 系统类；不写 frame。
             - **v1.0.1**：签名器 LC_CODE_SIGNATURE=0x1D，TrollFools 可注入。
 

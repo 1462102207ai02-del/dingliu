@@ -7,6 +7,41 @@ static NSString *WDOnKey(NSString *n) { return [@"WD.on." stringByAppendingStrin
 static NSString *WDRadKey(NSString *n) { return [@"WD.r." stringByAppendingString:n]; }
 static NSString *WDInsKey(NSString *n) { return [@"WD.i." stringByAppendingString:n]; }
 
+static NSString *WDBgOnKey(int page)  { return [NSString stringWithFormat:@"WD.bg.on.%d", page]; }
+static NSString *WDBgLitKey(int page) { return [NSString stringWithFormat:@"WD.bg.l.%d", page]; }
+static NSString *WDBgDarkKey(int page){ return [NSString stringWithFormat:@"WD.bg.d.%d", page]; }
+
+UIColor *WDColorForHex(NSString *hex) {
+    if (hex.length == 0) return nil;
+    NSString *h = [hex stringByReplacingOccurrencesOfString:@"#" withString:@""];
+    if (h.length != 6 && h.length != 8) return nil;
+    unsigned v = 0;
+    NSScanner *s = [NSScanner scannerWithString:h];
+    if (!s || ![s scanHexInt:&v]) return nil;
+    if (h.length == 8)
+        return [UIColor colorWithRed:((v >> 16) & 0xff) / 255.0
+                               green:((v >> 8) & 0xff) / 255.0
+                                blue:(v & 0xff) / 255.0
+                               alpha:((v >> 24) & 0xff) / 255.0];
+    return [UIColor colorWithRed:((v >> 16) & 0xff) / 255.0
+                           green:((v >> 8) & 0xff) / 255.0
+                            blue:(v & 0xff) / 255.0
+                           alpha:1.0];
+}
+
+NSString *WDHexForColor(UIColor *c) {
+    if (!c) return nil;
+    CGFloat r = 0, g = 0, b = 0, a = 1;
+    if (![c getRed:&r green:&g blue:&b alpha:&a]) return nil;
+    r = MAX(0.0, MIN(1.0, r)); g = MAX(0.0, MIN(1.0, g));
+    b = MAX(0.0, MIN(1.0, b)); a = MAX(0.0, MIN(1.0, a));
+    if (a < 0.999)
+        return [NSString stringWithFormat:@"#%02X%02X%02X%02X",
+                (int)roundf(a * 255), (int)roundf(r * 255), (int)roundf(g * 255), (int)roundf(b * 255)];
+    return [NSString stringWithFormat:@"#%02X%02X%02X",
+            (int)roundf(r * 255), (int)roundf(g * 255), (int)roundf(b * 255)];
+}
+
 @implementation WDPrefs {
     NSUserDefaults *_ud;
 }
@@ -71,6 +106,10 @@ static NSString *WDInsKey(NSString *n) { return [@"WD.i." stringByAppendingStrin
     [_ud setDouble:r forKey:WDRadKey(name)];
     [self ping];
 }
+- (void)clearRadiusForClass:(NSString *)name {
+    [_ud removeObjectForKey:WDRadKey(name)];
+    [self ping];
+}
 
 - (BOOL)hasCustomInset:(NSString *)name {
     return [_ud objectForKey:WDInsKey(name)] != nil;
@@ -81,14 +120,17 @@ static NSString *WDInsKey(NSString *n) { return [@"WD.i." stringByAppendingStrin
     // 气泡默认不缩进：defInset=0 且未自定义时保持 0
     if (def == 0 && ![self hasCustomInset:name]) {
         const WDItem *it = WDCatalogFind(name);
-        if (it && it->kind == WDKindBubble) return 0;
-        if (it && it->defInset == 0) return 0;
+        if (it && (it->kind == WDKindBubble || it->defInset == 0)) return 0;
     }
     if (def > 0) return def;
     return self.globalInset;
 }
 - (void)setInset:(CGFloat)v forClass:(NSString *)name {
     [_ud setDouble:v forKey:WDInsKey(name)];
+    [self ping];
+}
+- (void)clearInsetForClass:(NSString *)name {
+    [_ud removeObjectForKey:WDInsKey(name)];
     [self ping];
 }
 
@@ -115,6 +157,37 @@ static NSString *WDInsKey(NSString *n) { return [@"WD.i." stringByAppendingStrin
     for (int i = 0; i < n; i++) {
         [_ud setBool:items[i].defOn != 0 forKey:WDOnKey(@(items[i].cls))];
     }
+    [self ping];
+}
+
+#pragma mark - 页面背景色
+
+- (BOOL)bgEnabledForPage:(int)page {
+    id v = [_ud objectForKey:WDBgOnKey(page)];
+    return v ? [v boolValue] : NO;
+}
+- (void)setBgEnabled:(BOOL)on forPage:(int)page {
+    [_ud setBool:on forKey:WDBgOnKey(page)];
+    [self ping];
+}
+- (NSString *)bgHexForPage:(int)page dark:(BOOL)dark {
+    return dark ? [_ud stringForKey:WDBgDarkKey(page)] : [_ud stringForKey:WDBgLitKey(page)];
+}
+- (void)setBgHex:(NSString *)hex forPage:(int)page dark:(BOOL)dark {
+    if (hex.length) [_ud setObject:hex forKey:(dark ? WDBgDarkKey(page) : WDBgLitKey(page))];
+    else [_ud removeObjectForKey:(dark ? WDBgDarkKey(page) : WDBgLitKey(page))];
+    [self ping];
+}
+- (UIColor *)bgColorForPage:(int)page dark:(BOOL)dark {
+    UIColor *c = WDColorForHex([self bgHexForPage:page dark:dark]);
+    // 深色模式下若没单独设深色，回退到浅色值，避免"设了没反应"
+    if (!c && dark) c = WDColorForHex([self bgHexForPage:page dark:NO]);
+    return c;
+}
+- (void)resetPage:(int)page {
+    [_ud removeObjectForKey:WDBgOnKey(page)];
+    [_ud removeObjectForKey:WDBgLitKey(page)];
+    [_ud removeObjectForKey:WDBgDarkKey(page)];
     [self ping];
 }
 
