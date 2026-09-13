@@ -536,7 +536,7 @@ static void DLPushSettings(void) {
         break;
     }
     if (!top) return;
-    UIViewController *s = [[DLSettingsController alloc] init];
+    UIViewController *s = [[NSClassFromString(@"DLSettingsController") alloc] init];
     UINavigationController *nav = nil;
     if ([top.navigationController isKindOfClass:[UINavigationController class]]) {
         nav = top.navigationController;
