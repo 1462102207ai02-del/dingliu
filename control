@@ -1,9 +1,9 @@
 Package: com.dingliu.wechat
 Name: dingliu
 DisplayName: 你啊爸支鼎溜
-Version: 1.0.3
+Version: 1.0.4
 Section: Tweaks
 Maintainer: dingliu
 Author: dingliu
 Description: 微信 8.0.70+ 全局圆角美化。整合重写自「微信首页圆角」「微信圆角」两个插件，rootless 与 TrollFools 双环境通用。
-Depends: firmware (>= 15.0)
+Depends: firmware (>= 14.0)

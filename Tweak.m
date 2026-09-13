@@ -43,7 +43,7 @@ static NSString * const kFullWidth       = @"DLFullWidthCells";      // 单元�
 static NSString * const kCleanBorders    = @"DLCleanSystemBorders";  // 清除系统自带描边
 
 static NSString * const kDisplayName     = @"你啊爸支鼎溜";
-static NSString * const kVersionString    = @"1.0.3";
+static NSString * const kVersionString    = @"1.0.4";
 
 // hook kind
 enum {
