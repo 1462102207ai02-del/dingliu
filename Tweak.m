@@ -230,6 +230,15 @@ static BOOL WDHookOwner(Class owner, int fallbackIdx) {
         int idx = WDIdxForClass(object_getClass(slf));
         if (idx < 0) idx = fallbackIdx;
         if (idx < 0) return;
+        // 关掉的项：如果这枚视图之前被装饰过（可能来自复用队列），就地还原，杜绝残留
+        if (!gMaster || !gSnap[idx].on) {
+            if ([slf isKindOfClass:[UIView class]] && WDStyleTagOf((UIView *)slf) >= 0) {
+                gDepth++;
+                @try { WDStyleRevertView((UIView *)slf); } @catch (NSException *e) {}
+                gDepth--;
+            }
+            return;
+        }
         gDepth++;
         @try { WDDecorate(slf, idx); } @catch (NSException *e) {}
         gDepth--;
