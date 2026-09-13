@@ -18,12 +18,14 @@ jobs:
       - name: Install packaging tools
         run: |
           set -o pipefail
+          mkdir -p /tmp/logs
           sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zip ldid 2>&1 | tee /tmp/logs/apt.log || true
           which ldid || echo "no apt ldid"
 
       - name: Install Theos & SDK
         run: |
           set -o pipefail
+          mkdir -p /tmp/logs
           {
             set -e
             export THEOS=$HOME/theos
@@ -45,6 +47,7 @@ jobs:
       - name: Ensure ldid
         run: |
           set -o pipefail
+          mkdir -p /tmp/logs
           {
             if ! which ldid; then
               for i in 1 2 3; do
@@ -61,6 +64,7 @@ jobs:
       - name: Build (rootless)
         run: |
           set -o pipefail
+          mkdir -p /tmp/logs
           {
             cd $GITHUB_WORKSPACE
             make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
