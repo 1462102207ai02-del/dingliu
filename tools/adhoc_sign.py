@@ -1,35 +1,32 @@
 #!/usr/bin/env python3
-"""Ad-hoc code signer for 64-bit Mach-O dylibs (v2).
+"""Ad-hoc code signer for 64-bit Mach-O dylibs (v3).
 
 Why this exists
 ---------------
-Theos built on Linux emits a dylib whose LC_CODE_SIGNATURE carries garbage
-offsets, and `ldid` (procursus builds) only appends a blob without writing the
-load command back. TrollFools' `ct_bypass` (ChOma) then rejects the file with
-"no code signature found" and the injection never happens.
+Theos on Linux emits a dylib whose LC_CODE_SIGNATURE is garbage, and
+`ldid` often only appends a blob without rewriting the load command.
+TrollFools' `ct_bypass` (ChOma) then rejects the file with
+"no code signature found".
 
-v1 of this script had a fatal bug: it patched __LINKEDIT at lc+40, which is the
-*fileoff* field, not filesize. That collapsed __LINKEDIT onto __TEXT, the
-segments overlapped, and every strict Mach-O parser (ChOma / dyld) treated the
-file as structurally broken -- exactly the "no code signature found" above.
+v1: patched __LINKEDIT at lc+40 (fileoff, not filesize) and deleted a
+    16-byte linkedit_data_command as if it were 24 bytes.
+v2: still used LC_CODE_SIGNATURE = 0x1B. That constant is LC_UUID
+    (24 bytes). The signer wrote SuperBlob offsets into the UUID
+    command and left the real 0x1D pointing at a stale Theos blob
+    whose datasize ran past EOF. ChOma only reads 0x1D, so injection
+    failed while verify_sig.py (also using 0x1B) reported OK.
+v3: LC_CODE_SIGNATURE = 0x1D, cmdsize forced to 16, hashOffset points
+    at the first *code* hash (Apple layout), special slots sit just
+    before it.
 
-Layout of LC_SEGMENT_64 (must not be re-derived from memory again):
+Layout of LC_SEGMENT_64:
     +0  cmd       +4  cmdsize    +8  segname[16]
     +24 vmaddr    +32 vmsize     +40 fileoff    +48 filesize
-
-What v2 does
-------------
-  1. repairs a corrupted __LINKEDIT fileoff (never writes to it otherwise)
-  2. strips the corrupt LC_CODE_SIGNATURE and any orphan trailing blob
-  3. inserts a fresh LC_CODE_SIGNATURE
-  4. writes a real ad-hoc SuperBlob (CodeDirectory v0x20400, SHA-256,
-     empty Requirements set), zero-padded page hashing, null Info slot
-  5. grows only __LINKEDIT filesize/vmsize
-  6. self-validates and exits non-zero if anything is off
 
 Usage: adhoc_sign.py <path> [identifier]
 """
 import hashlib
+import os
 import struct
 import sys
 
@@ -47,11 +44,22 @@ PAGE_SIZE = 1 << PAGE_SHIFT
 
 LC_SEGMENT_64 = 0x19
 LC_ID_DYLIB = 0x0D
-LC_CODE_SIGNATURE = 0x1B
+LC_UUID = 0x1B
+LC_CODE_SIGNATURE = 0x1D          # NOT 0x1B (that is LC_UUID)
 LC_SYMTAB = 0x02
 LC_DYLD_INFO = 0x22
 LC_DYLD_INFO_ONLY = 0x80000022
-LINKEDIT_DATA_CMDS = (0x1B, 0x1C, 0x25, 0x26, 0x29, 0x2B, 0x2E, 0x33, 0x80000033)
+# linkedit_data_command: cmd, cmdsize, dataoff, datasize (16 bytes)
+LINKEDIT_DATA_CMDS = (
+    0x1D,          # LC_CODE_SIGNATURE
+    0x1E,          # LC_SEGMENT_SPLIT_INFO
+    0x26,          # LC_FUNCTION_STARTS
+    0x29,          # LC_DATA_IN_CODE
+    0x2B,          # LC_DYLIB_CODE_SIGN_DRS
+    0x2E,          # LC_LINKER_OPTIMIZATION_HINT
+    0x80000033,    # LC_DYLD_EXPORTS_TRIE
+    0x80000034,    # LC_DYLD_CHAINED_FIXUPS
+)
 
 
 def align(x, a):
@@ -71,17 +79,19 @@ class MachO(object):
         self.sizeofcmds, = struct.unpack_from("<I", self.d, 20)
         self.scan()
 
-    # ------------------------------------------------------------------ scan
     def scan(self):
         d = self.d
-        self.segs = {}          # name -> [lc_off, vmaddr, vmsize, fileoff, filesize]
-        self.sig_lc = None      # lc_off or None
-        self.sig = None         # (dataoff, datasize)
+        self.segs = {}
+        self.sig_lc = None
+        self.sig = None
+        self.uuid_lc = None
         self.symtab = None
         self.ident = None
         off = 32
         for _ in range(self.ncmds):
             cmd, size = struct.unpack_from("<II", d, off)
+            if size < 8:
+                raise SystemExit(f"FAIL: cmdsize {size} at 0x{off:x}")
             if cmd == LC_SEGMENT_64:
                 name = d[off + 8:off + 24].split(b"\x00")[0].decode()
                 vmaddr, vmsize, fileoff, filesize = struct.unpack_from("<QQQQ", d, off + 24)
@@ -89,6 +99,8 @@ class MachO(object):
             elif cmd == LC_CODE_SIGNATURE:
                 self.sig_lc = off
                 self.sig = struct.unpack_from("<II", d, off + 8)
+            elif cmd == LC_UUID:
+                self.uuid_lc = off
             elif cmd == LC_SYMTAB:
                 self.symtab = struct.unpack_from("<IIII", d, off + 8)
             elif cmd == LC_ID_DYLIB:
@@ -96,9 +108,8 @@ class MachO(object):
                 self.ident = d[off + name_off:off + size].split(b"\x00")[0].decode()
             off += size
 
-    # --------------------------------------------------------- linkedit tail
     def linkedit_tail(self):
-        """Last byte of real __LINKEDIT content (where a signature may start)."""
+        """Last byte of real __LINKEDIT content (signature may start here)."""
         d = self.d
         end = 0
         off = 32
@@ -116,12 +127,10 @@ class MachO(object):
             symoff, nsyms, stroff, strsize = self.symtab
             end = max(end, symoff + nsyms * 16, stroff + strsize)
         if "__LINKEDIT" in self.segs:
-            end = max(end, self.segs["__LINKEDIT"][3])  # fileoff
+            end = max(end, self.segs["__LINKEDIT"][3])
         return end
 
-    # ------------------------------------------------------------- repair LE
     def repair_linkedit(self):
-        """Fix a __LINKEDIT fileoff that a broken signer has clobbered."""
         if "__LINKEDIT" not in self.segs:
             return
         lc, vmaddr, _vmsize, fileoff, _filesize = self.segs["__LINKEDIT"]
@@ -135,23 +144,24 @@ class MachO(object):
             self.segs["__LINKEDIT"][3] = want
             self.scan()
 
-    # ------------------------------------------------------------ strip sig
-    def drop_orphan_blob(self, tail):
-        """Drop the orphan blob the corrupt LC points at.
+    def repair_uuid(self):
+        """v2 wrote SuperBlob offsets into LC_UUID. Restore a random UUID."""
+        if self.uuid_lc is None:
+            return
+        off = self.uuid_lc
+        a, b = struct.unpack_from("<II", self.d, off + 8)
+        if a < len(self.d) and 16 <= b <= 0x20000:
+            self.d[off + 8:off + 24] = os.urandom(16)
+            print("repaired LC_UUID clobbered by signer v2")
 
-        NOTE: we never delete bytes out of the load-command area. __TEXT starts
-        at fileoff 0 and contains the header + all load commands, so removing
-        bytes there shifts every section's contents by that amount while the
-        recorded offsets stay put -- silently corrupting the whole image.
-        LC_CODE_SIGNATURE is a 16-byte linkedit_data_command; v1 assumed 24 and
-        truncated 8 bytes of live data because of it.
-        """
+    def drop_orphan_blob(self, tail):
+        """Drop trailing signature bytes. Never delete inside load commands."""
         if len(self.d) > tail:
             print(f"truncated orphan trailing data: {len(self.d)} -> {tail}")
             del self.d[tail:]
 
     def lc_slot(self):
-        """Reuse the existing LC_CODE_SIGNATURE, else claim 16 bytes of padding."""
+        """Reuse existing LC_CODE_SIGNATURE (0x1D), else claim 16 pad bytes."""
         if self.sig_lc is not None:
             return self.sig_lc
         hdr_end = 32 + self.sizeofcmds
@@ -167,32 +177,27 @@ class MachO(object):
             return hdr_end
         raise SystemExit("FAIL: no LC_CODE_SIGNATURE and no room to insert one")
 
-    # -------------------------------------------------------------- sign it
     def sign(self, ident):
         d = self.d
-        # pad the file out to the 16-byte aligned signature start
         dataoff = align(len(d), 16)
         if dataoff > len(d):
             d += b"\x00" * (dataoff - len(d))
 
-        # --- locate / insert LC_CODE_SIGNATURE -----------------------------
         lc_pos = self.lc_slot()
 
-        # --- sizes first: everything that changes bytes inside [0, dataoff)
-        #     must be written BEFORE the page hashes are taken --------------
         ident_b = ident.encode() + b"\x00"
         cd_hdr_len = 88
-        n_special = 2                       # -1 Info (null), -2 Requirements
+        n_special = 2
         n_code = (dataoff + PAGE_SIZE - 1) // PAGE_SIZE
-        # hashOffset points at the START of the hash array, and the special
-        # slots are the first entries of that array -- do not add them here.
+        # Apple: hashOffset = first CODE hash. Special -i is hashOffset - i*32.
         ident_off = cd_hdr_len
-        hash_off = ident_off + len(ident_b)
-        cd_len = hash_off + (n_special + n_code) * 32
+        special_off = ident_off + len(ident_b)
+        hash_off = special_off + n_special * 32
+        cd_len = hash_off + n_code * 32
         req = blob(CSMAGIC_REQUIREMENTS, struct.pack(">I", 0))
         sb_len = 12 + 16 + cd_len + len(req)
 
-        struct.pack_into("<II", d, lc_pos + 8, dataoff, sb_len)
+        struct.pack_into("<IIII", d, lc_pos, LC_CODE_SIGNATURE, 16, dataoff, sb_len)
         if "__LINKEDIT" in self.segs:
             lc, _vmaddr, _vmsize, fileoff, _filesize = self.segs["__LINKEDIT"]
             new_filesize = dataoff + sb_len - fileoff
@@ -202,38 +207,32 @@ class MachO(object):
             self.segs["__LINKEDIT"][4] = new_filesize
             self.segs["__LINKEDIT"][2] = new_vmsize
 
-        # --- CodeDirectory v0x20400 ---------------------------------------
         cd = bytearray(cd_len)
         struct.pack_into(">IIII", cd, 0, CSMAGIC_CODEDIRECTORY, cd_len, 0x20400, CS_ADHOC)
         struct.pack_into(">I", cd, 16, hash_off)
         struct.pack_into(">I", cd, 20, ident_off)
         struct.pack_into(">I", cd, 24, n_special)
         struct.pack_into(">I", cd, 28, n_code)
-        struct.pack_into(">I", cd, 32, dataoff)     # codeLimit
-        cd[36] = 32                                  # hashSize SHA-256
-        cd[37] = 2                                   # hashType SHA-256
-        cd[38] = 0                                   # platform
+        struct.pack_into(">I", cd, 32, dataoff)
+        cd[36] = 32
+        cd[37] = 2
+        cd[38] = 0
         cd[39] = PAGE_SHIFT
-        # v0x20300: spare3(52)=0, codeLimit64(56)=dataoff
         struct.pack_into(">Q", cd, 56, dataoff)
-        # v0x20400: execSegBase / execSegLimit / execSegFlags
         text = self.segs.get("__TEXT")
         if text:
             struct.pack_into(">QQQ", cd, 64, text[1], text[2], 0)
         cd[ident_off:ident_off + len(ident_b)] = ident_b
 
-        # special slots: -1 Info (null hash, no Info.plist), -2 Requirements
-        hashes = bytearray(32) + hashlib.sha256(req).digest()
-        # code slots: every page, last one zero-padded like codesign does
+        hashes = hashlib.sha256(req).digest() + bytes(32)
         for i in range(n_code):
             chunk = bytes(d[i * PAGE_SIZE:(i + 1) * PAGE_SIZE])
             if len(chunk) < PAGE_SIZE:
                 chunk += b"\x00" * (PAGE_SIZE - len(chunk))
             hashes += hashlib.sha256(chunk).digest()
-        cd[hash_off:hash_off + len(hashes)] = hashes
+        cd[special_off:special_off + len(hashes)] = hashes
         cd = bytes(cd)
 
-        # --- SuperBlob -----------------------------------------------------
         cd_off = 12 + 16
         req_off = cd_off + len(cd)
         total = req_off + len(req)
@@ -244,13 +243,11 @@ class MachO(object):
         assert len(sb) == sb_len == total
 
         d += sb
-
         self.sig = (dataoff, len(sb))
         return dataoff, len(sb)
 
 
 def validate(path):
-    """Second pass, independent of the writer: re-derive everything."""
     with open(path, "rb") as f:
         d = f.read()
     m = MachO(d)
@@ -259,13 +256,22 @@ def validate(path):
 
     size = len(d)
     if m.sig is None:
-        return ["LC_CODE_SIGNATURE missing"], None, (0, 0)
+        return ["LC_CODE_SIGNATURE (0x1D) missing"], None, (0, 0)
     dataoff, datasize = m.sig
+    if m.sig_lc is not None:
+        cmd, csz = struct.unpack_from("<II", d, m.sig_lc)
+        if cmd != LC_CODE_SIGNATURE:
+            errs.append(f"signature LC cmd is 0x{cmd:x}, want 0x1D")
+        if csz != 16:
+            errs.append(f"LC_CODE_SIGNATURE cmdsize {csz}, want 16")
 
     if dataoff + datasize != size:
         errs.append(f"signature does not end at EOF: {dataoff + datasize} != {size}")
     if dataoff % 16:
         errs.append(f"dataoff not 16-aligned: 0x{dataoff:x}")
+    if dataoff + datasize > size:
+        errs.append(f"signature overruns file: 0x{dataoff:x}+0x{datasize:x} > 0x{size:x}")
+        return errs, None, (0, 0)
 
     le = m.segs.get("__LINKEDIT")
     if le is None:
@@ -278,13 +284,11 @@ def validate(path):
         if lfo + lfs != size:
             errs.append(f"__LINKEDIT does not end at EOF: 0x{lfo+lfs:x} != 0x{size:x}")
 
-    # segments must not overlap in the file
     order = sorted(m.segs.values(), key=lambda s: s[3])
     for a, b in zip(order, order[1:]):
         if a[3] + a[4] > b[3]:
             errs.append(f"segments overlap: end 0x{a[3]+a[4]:x} > next start 0x{b[3]:x}")
 
-    # superblob / code directory
     magic, length = struct.unpack_from(">II", d, dataoff)
     if magic != CSMAGIC_EMBEDDED_SIGNATURE:
         errs.append(f"bad superblob magic 0x{magic:x}")
@@ -317,13 +321,14 @@ def validate(path):
         errs.append("nCodeSlots does not match codeLimit")
     if hash_size != 32:
         errs.append(f"unexpected hashSize {hash_size}")
+    if hash_offset < ident_offset + 1 + n_special * hash_size:
+        errs.append(f"hashOffset {hash_offset} does not leave room for special slots")
 
     cname = d[cd_off + ident_offset:cd_off + cdl].split(b"\x00")[0].decode("utf-8", "replace")
-    # recompute page hashes over [0, codeLimit) only, zero-padded to a page
     src = d[:code_limit]
     bad = 0
     for i in range(n_code):
-        want = struct.unpack_from("32s", d, cd_off + hash_offset + (n_special + i) * 32)[0]
+        want = struct.unpack_from("32s", d, cd_off + hash_offset + i * 32)[0]
         chunk = src[i * page:(i + 1) * page]
         if len(chunk) < page:
             chunk += b"\x00" * (page - len(chunk))
@@ -339,7 +344,10 @@ def main():
     with open(path, "rb") as f:
         m = MachO(f.read())
     m.repair_linkedit()
-    ident = sys.argv[2] if len(sys.argv) > 2 else (m.ident or "dingliu")
+    m.repair_uuid()
+    ident = sys.argv[2] if len(sys.argv) > 2 else (m.ident or "WechatDuo")
+    if ident.startswith("/") or ident.startswith("@"):
+        ident = os.path.splitext(os.path.basename(ident))[0] or "WechatDuo"
     tail = m.linkedit_tail()
     m.drop_orphan_blob(tail)
     dataoff, blob_len = m.sign(ident)
@@ -355,7 +363,7 @@ def main():
         sys.exit(1)
     errs, cname, (n_code, page) = res
     print(f"validate OK: ident={cname} pages={n_code}@{page} "
-          f"ad-hoc, signature inside __LINKEDIT, ends at EOF")
+          f"ad-hoc, LC=0x1D cmdsize=16, signature inside __LINKEDIT, ends at EOF")
 
 
 if __name__ == "__main__":

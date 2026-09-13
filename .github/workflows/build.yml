@@ -111,10 +111,14 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: WechatDuo v1.0.0
+          tag_name: v1.0.1
+          name: WechatDuo v1.0.1
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
+
+            - **v1.0.1 关键修复**：签名器把 `LC_UUID`(0x1B) 当成了 `LC_CODE_SIGNATURE`(0x1D)，
+              真签名命令 datasize 越出 EOF，ChOma/`ct_bypass` 报
+              `Error: no code signature found`。现按 0x1D / cmdsize=16 写入 SuperBlob。
 
             - 顶栏 / 底栏 / 横幅 / 列表 / 搜索 / 输入 / 气泡 / 弹层 / 视频号 / 钱包
             - 每个类有中文简称，可单独开关、圆角、双侧缩进

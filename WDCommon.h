@@ -11,7 +11,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-#define WD_VERSION      @"1.0.0"
+#define WD_VERSION      @"1.0.1"
 #define WD_DISPLAY_NAME @"WechatDuo"
 #define WD_SETTINGS_CLS @"WDSettingsController"
 #define WD_LOG_NAME     @"WechatDuo.log"

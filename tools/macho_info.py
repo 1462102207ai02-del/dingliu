@@ -3,17 +3,17 @@
 import struct, sys
 
 LC_NAMES = {
-    0x19: "LC_SEGMENT_64", 0x1B: "LC_CODE_SIGNATURE", 0x02: "LC_SYMTAB",
+    0x19: "LC_SEGMENT_64", 0x1B: "LC_UUID", 0x02: "LC_SYMTAB",
     0x0B: "LC_DYSYMTAB", 0x0C: "LC_LOAD_DYLIB", 0x0D: "LC_ID_DYLIB",
-    0x1C: "LC_SEGMENT_SPLIT_INFO", 0x1D: "LC_REEXPORT_DYLIB",
+    0x1C: "LC_SEGMENT_SPLIT_INFO", 0x1D: "LC_CODE_SIGNATURE",
     0x20: "LC_LAZY_LOAD_DYLIB", 0x22: "LC_DYLD_INFO",
     0x80000022: "LC_DYLD_INFO_ONLY", 0x24: "LC_VERSION_MIN_MACOSX",
-    0x25: "LC_FUNCTION_STARTS", 0x26: "LC_DATA_IN_CODE",
+    0x25: "LC_VERSION_MIN_IPHONEOS", 0x26: "LC_FUNCTION_STARTS", 0x29: "LC_DATA_IN_CODE",
     0x2A: "LC_SOURCE_VERSION", 0x2B: "LC_DYLIB_CODE_SIGN_DRS",
     0x2C: "LC_ENCRYPTION_INFO_64", 0x2E: "LC_LINKER_OPTION",
     0x32: "LC_BUILD_VERSION", 0x33: "LC_DYLD_EXPORTS_TRIE",
-    0x80000033: "LC_DYLD_CHAINED_FIXUPS", 0x80000034: "LC_FILESET_ENTRY",
-    0x1E: "LC_UUID", 0x0E: "LC_LOAD_WEAK_DYLIB", 0x18: "LC_RPATH",
+    0x80000033: "LC_DYLD_EXPORTS_TRIE", 0x80000034: "LC_DYLD_CHAINED_FIXUPS",
+    0x1E: "LC_SEGMENT_SPLIT_INFO", 0x0E: "LC_LOAD_WEAK_DYLIB", 0x18: "LC_RPATH",
 }
 
 
@@ -49,10 +49,12 @@ def main(path):
             vmaddr, vmsize, fileoff, filesize = struct.unpack_from("<QQQQ", d, off + 24)
             segs[seg] = (fileoff, filesize, vmaddr, vmsize)
             extra = f"{seg:12s} fileoff=0x{fileoff:x} filesize=0x{filesize:x} vmaddr=0x{vmaddr:x} vmsize=0x{vmsize:x} end=0x{fileoff+filesize:x}"
-        elif cmd == 0x1B:
+        elif cmd == 0x1D:
             dataoff, datasize = struct.unpack_from("<II", d, off + 8)
             sig = (dataoff, datasize)
             extra = f"dataoff=0x{dataoff:x} datasize=0x{datasize:x} end=0x{dataoff+datasize:x}"
+        elif cmd == 0x1B:
+            extra = f"uuid={d[off+8:off+24].hex()}"
         print(f"  [{i:2d}] off=0x{off:04x} size={size:3d} {name} {extra}")
         off += size
 
