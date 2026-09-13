@@ -230,7 +230,7 @@
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
     if (s != 0) return nil;
     WDPrefs *p = [WDPrefs shared];
-    return [NSString stringWithFormat:@"留空 = 跟随全局（圆角 %.0f / 缩进 %.0f）。气泡不缩进。",
+    return [NSString stringWithFormat:@"留空 = 跟随全局（圆角 %.0f / 缩进 %.0f）。",
             p.globalRadius, p.globalInset];
 }
 

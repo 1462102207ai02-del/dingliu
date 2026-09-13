@@ -111,11 +111,19 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.4
-          name: WechatDuo v1.1.4
+          tag_name: v1.1.5
+          name: WechatDuo v1.1.5
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.5**
+              - 列表打孔 overlay：不改内容 frame，消息时间/文字位置不变；分割线画在卡片内，卡片外分割线隐藏
+              - 置顶横幅可点：plate 不接收点击、宿主不 clip
+              - 聊天窗口背景与气泡全部不动，设置项已移除
+              - 插件收纳首页不受页面背景色影响
+              - 首页顶栏（含搜索框外一圈）跟页面背景色
+              - 通讯录五大类合成一整片；字母页眉与「三天前 / N个服务号 / N个公众号」页尾全透明
+              - 所有搜索栏同步首页卡片缩进+圆角（WCSearchBar 两层）
             - **v1.1.4**
               - 首页非置顶会话：中间行也收内部 MainFrameItemView / 满宽背景图，灰缝可见
               - 置顶横幅：装饰 MainFrameSectionFoldView（区头/浮动视图），不再只等 cell
@@ -146,7 +154,7 @@ jobs:
             - **v1.0.2**：constructor 延迟；不 hook 系统类；不写 frame。
             - **v1.0.1**：签名器 LC_CODE_SIGNATURE=0x1D，TrollFools 可注入。
 
-            - 顶栏 / 底栏 / 横幅 / 列表 / 搜索 / 输入 / 气泡 / 弹层 / 视频号 / 钱包
+            - 顶栏 / 底栏 / 横幅 / 列表 / 搜索 / 输入 / 弹层 / 视频号 / 钱包
             - 每个类有中文简称，可单独开关、圆角、双侧缩进
             - 接入插件收纳（MinimizeViewController → WCPluginsMgr）
             - Bundle ID：com.tencent.xin / com.tencent.qy.xin / com.tencent.mm.xin / com.tencent.wx

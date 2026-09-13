@@ -8,6 +8,9 @@ void WDStyleRound(UIView *view, CGFloat radius, BOOL continuous, int tag);
 void WDStyleRoundCorners(UIView *view, CGFloat radius, NSUInteger corners, BOOL continuous, int tag);
 void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
+void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
+void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
+void WDStyleClearHeader(UIView *view);
 
 // 设置页自身卡片化：圆角 + 双侧缩进 + 分区内首尾圆角
 void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL continuous);

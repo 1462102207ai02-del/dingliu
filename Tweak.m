@@ -49,6 +49,8 @@ static int gInstalled = 0;
 static int gSafe = 0;
 static BOOL gMaster = YES;
 static BOOL gContinuous = YES;
+static float gHomeR = 16.f;
+static float gHomeI = 12.f;
 
 typedef struct { char on; float r; float i; int kind; } WDSnap;
 static WDSnap gSnap[160];
@@ -201,7 +203,10 @@ static void WDSnapshot(void) {
         gSnap[i].r = (float)[p radiusForClass:name def:items[i].defRadius];
         gSnap[i].i = (float)[p insetForClass:name def:items[i].defInset];
         gSnap[i].kind = items[i].kind;
-        if (items[i].kind == WDKindBubble) gSnap[i].i = 0;
+        if (strcmp(items[i].cls, "NewMainFrameCell") == 0) {
+            gHomeR = gSnap[i].r;
+            gHomeI = gSnap[i].i;
+        }
     }
     char on = [p bgEnabled] ? 1 : 0;
     NSString *l = [p bgHexDark:NO];
@@ -215,11 +220,72 @@ static void WDSnapshot(void) {
     }
 }
 
+static BOOL WDNameHas(const char *nm, const char *needle) {
+    return nm && needle && strstr(nm, needle) != NULL;
+}
+
+static BOOL WDIsChatView(UIView *v) {
+    if (!v) return NO;
+    const char *nm = class_getName(object_getClass(v));
+    if (!nm) return NO;
+    if (WDNameHas(nm, "ChatTableViewCell")) return YES;
+    if (WDNameHas(nm, "BaseMsgContentViewController")) return YES;
+    if (WDNameHas(nm, "MsgContentViewController")) return YES;
+    if (WDNameHas(nm, "MessageCellView")) return YES;
+    if (WDNameHas(nm, "ChatTimeCell")) return YES;
+    UIView *p = v;
+    int d = 0;
+    while (p && d < 8) {
+        const char *pn = class_getName(object_getClass(p));
+        if (pn && (strstr(pn, "BaseMsgContent") || strstr(pn, "MsgContentView"))) return YES;
+        p = p.superview;
+        d++;
+    }
+    return NO;
+}
+
+static BOOL WDNameIsPlugin(const char *n) {
+    return n && strstr(n, "WCPlugins") != NULL;
+}
+
+static BOOL WDIsPluginStorage(UIViewController *vc) {
+    if (!vc) return NO;
+    for (UIViewController *c = vc; c; ) {
+        if (WDNameIsPlugin(class_getName([c class]))) return YES;
+        if (c.presentedViewController && WDNameIsPlugin(class_getName([c.presentedViewController class]))) return YES;
+        if (c.parentViewController) { c = c.parentViewController; continue; }
+        if (c.navigationController && c.navigationController != c) { c = c.navigationController; continue; }
+        break;
+    }
+    return NO;
+}
+
+static BOOL WDIsChatController(UIViewController *vc) {
+    if (!vc) return NO;
+    const char *n = class_getName([vc class]);
+    if (!n) return NO;
+    if (strstr(n, "BaseMsgContent") || strstr(n, "MsgContentViewController")) return YES;
+    if (strstr(n, "BaseChatViewController")) return YES;
+    return NO;
+}
+
 static void WDDecorate(id self, int idx) {
     if (idx < 0 || idx >= 160) return;
     if (!gSnap[idx].on) return;
     if (![self isKindOfClass:[UIView class]]) return;
     UIView *v = (UIView *)self;
+    if (WDIsChatView(v)) return;
+    const WDItem *it = &WDCatalogItems()[idx];
+    if (it->kind == WDKindBubble || it->group == WDGroupBubble) return;
+    if (it->group == WDGroupSearch) {
+        WDStyleSearch(v, gHomeI > 0.5f ? gHomeI : gSnap[idx].i,
+                      gHomeR > 0.5f ? gHomeR : gSnap[idx].r, gContinuous, idx);
+        return;
+    }
+    if (it->group == WDGroupHeader) {
+        WDStyleClearHeader(v);
+        return;
+    }
     if ([v isKindOfClass:[UITableViewCell class]]) {
         WDStyleCell((UITableViewCell *)v, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
         return;
@@ -374,11 +440,55 @@ static BOOL WDIsOurController(UIViewController *vc) {
     return n && strncmp(n, "WD", 2) == 0;
 }
 
+static void WDPaintNavChrome(UIViewController *vc, UIColor *want) {
+    if (!vc) return;
+    UINavigationController *nav = vc.navigationController;
+    if (nav) {
+        UINavigationBar *bar = nav.navigationBar;
+        if (bar) WDPaintView(bar, want);
+        if (nav.view) {
+            for (UIView *s in nav.view.subviews) {
+                const char *nm = class_getName(object_getClass(s));
+                if (!nm) continue;
+                if (strstr(nm, "NavigationBar") || strstr(nm, "BarBackground") || strstr(nm, "BarContent")) {
+                    WDPaintView(s, want);
+                }
+            }
+        }
+    }
+    UIView *v = vc.view;
+    if (!v) return;
+    for (UIView *s in v.subviews) {
+        const char *nm = class_getName(object_getClass(s));
+        if (!nm) continue;
+        if (strstr(nm, "SearchBar") || strstr(nm, "WCSearch") ||
+            strstr(nm, "TopHeader") || strstr(nm, "CustomBar") ||
+            strstr(nm, "TitleView") || strstr(nm, "NavBar")) {
+            WDPaintView(s, want);
+            for (UIView *c in s.subviews) {
+                const char *cn = class_getName(object_getClass(c));
+                if (cn && (strstr(cn, "Container") || strstr(cn, "Background") || strstr(cn, "Spacer"))) {
+                    WDPaintView(c, want);
+                }
+            }
+        }
+    }
+}
+
 static void WDPaintTree(UIViewController *vc, UIColor *want) {
     if (!vc || !vc.isViewLoaded || !vc.view) return;
+    if (WDIsPluginStorage(vc) || WDIsChatController(vc) || WDIsOurController(vc)) {
+        WDPaintView(vc.view, nil);
+        return;
+    }
     WDPaintView(vc.view, want);
+    WDPaintNavChrome(vc, want);
     for (UIView *s in vc.view.subviews) {
         if ([s isKindOfClass:[UIScrollView class]]) WDPaintView(s, want);
+        const char *nm = class_getName(object_getClass(s));
+        if (nm && (strstr(nm, "SearchBar") || strstr(nm, "TopHeader") || strstr(nm, "CustomBar"))) {
+            WDPaintView(s, want);
+        }
     }
 }
 
@@ -417,8 +527,31 @@ static void WDPageBgApply(void) {
             // 只染该 Tab 的根页面，push 进去的子页面保持原样
             if (nav.topViewController != root) { WDPaintTree(root, nil); continue; }
         }
-        if (!root || WDIsOurController(root)) { continue; }
+        if (!root || WDIsOurController(root) || WDIsPluginStorage(root) || WDIsChatController(root)) {
+            WDPaintTree(root, nil);
+            continue;
+        }
         WDPaintTree(root, WDWantColor(WDPageForTabIndex(i)));
+    }
+    UIApplication *app = [UIApplication sharedApplication];
+    if (!app) return;
+    for (UIWindow *w in app.windows) {
+        UIViewController *r = w.rootViewController;
+        NSMutableArray *q = [NSMutableArray array];
+        if (r) [q addObject:r];
+        int n = 0;
+        while (q.count && n < 40) {
+            UIViewController *c = q.firstObject;
+            [q removeObjectAtIndex:0];
+            n++;
+            if (WDIsPluginStorage(c) || WDIsChatController(c)) WDPaintTree(c, nil);
+            if (c.presentedViewController) [q addObject:c.presentedViewController];
+            [q addObjectsFromArray:c.childViewControllers];
+            if ([c isKindOfClass:[UINavigationController class]]) {
+                UIViewController *top = ((UINavigationController *)c).topViewController;
+                if (top) [q addObject:top];
+            }
+        }
     }
 }
 
@@ -552,6 +685,7 @@ static int gDefCellIdx = -2;
 static void WDDecorateCellIfNeeded(UITableViewCell *cell) {
     if (!gLive || !gMaster || gSafe) return;
     if (![cell isKindOfClass:[UITableViewCell class]]) return;
+    if (WDIsChatView(cell)) return;
     int idx = WDIdxForClass(object_getClass(cell));
     if (idx < 0) {
         if (gDefCellIdx == -2) gDefCellIdx = WDIndexOfClassName("MMTableViewCell");
@@ -577,6 +711,17 @@ static BOOL WDHookWillDisplay(const char *clsName) {
     IMP stub = imp_implementationWithBlock(^(id slf, UITableView *tv, UITableViewCell *cell, NSIndexPath *ip) {
         if (orig) ((void (*)(id, SEL, id, id, id))orig)(slf, s, tv, cell, ip);
         if (![NSThread isMainThread]) return;
+        if (gLive && gMaster && !gSafe && [cell isKindOfClass:[UITableViewCell class]] && !WDIsChatView(cell)) {
+            int idx = WDIdxForClass(object_getClass(cell));
+            if (idx < 0) {
+                if (gDefCellIdx == -2) gDefCellIdx = WDIndexOfClassName("MMTableViewCell");
+                idx = gDefCellIdx;
+            }
+            if (idx >= 0 && idx < 160 && gSnap[idx].on) {
+                @try { WDStyleCellAt(cell, tv, ip, gSnap[idx].i, gSnap[idx].r, gContinuous, idx); } @catch (NSException *e) {}
+                return;
+            }
+        }
         @try { WDDecorateCellIfNeeded(cell); } @catch (NSException *e) {}
     });
     if (!stub) return NO;
@@ -604,9 +749,13 @@ static void WDDecorateViewTree(UIView *v, int depth) {
         WDDecorate(v, idx);
     } else {
         const char *nm = class_getName(object_getClass(v));
-        if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner") || strstr(nm, "MFBanner"))) {
+        if (nm && strstr(nm, "FoldView")) {
             if (gDefBannerIdx == -2) gDefBannerIdx = WDIndexOfClassName("MainFrameSectionFoldView");
             if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) WDDecorate(v, gDefBannerIdx);
+        } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "WCSearchBar") || strstr(nm, "MMUISearchBar"))) {
+            WDStyleSearch(v, gHomeI, gHomeR, gContinuous, 0);
+        } else if (nm && (strstr(nm, "SectionHeader") || strstr(nm, "MMTableSection"))) {
+            WDStyleClearHeader(v);
         }
     }
     for (UIView *s in v.subviews) WDDecorateViewTree(s, depth + 1);
@@ -625,7 +774,44 @@ static BOOL WDHookWillDisplayHeader(const char *clsName) {
         if (orig) ((void (*)(id, SEL, id, id, NSInteger))orig)(slf, s, tv, header, section);
         if (!gLive || !gMaster || gSafe) return;
         if (![NSThread isMainThread]) return;
-        @try { WDDecorateViewTree(header, 0); } @catch (NSException *e) {}
+        @try {
+            if ([header isKindOfClass:[UIView class]]) {
+                const char *nm = class_getName(object_getClass(header));
+                if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner"))) {
+                    WDDecorateViewTree(header, 0);
+                } else {
+                    WDStyleClearHeader(header);
+                }
+            }
+        } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) {
+        method_setImplementation(m, stub);
+        ok = YES;
+    } else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:@@q";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 16) hooked[hookedN++] = cls;
+    return ok;
+}
+
+static BOOL WDHookWillDisplayFooter(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(tableView:willDisplayFooterView:forSection:);
+    Method m = class_getInstanceMethod(cls, s);
+    IMP orig = m ? method_getImplementation(m) : NULL;
+    static Class hooked[16];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP stub = imp_implementationWithBlock(^(id slf, UITableView *tv, UIView *footer, NSInteger section) {
+        if (orig) ((void (*)(id, SEL, id, id, NSInteger))orig)(slf, s, tv, footer, section);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { if ([footer isKindOfClass:[UIView class]]) WDStyleClearHeader(footer); } @catch (NSException *e) {}
     });
     if (!stub) return NO;
     BOOL ok = NO;
@@ -656,7 +842,11 @@ static BOOL WDHookViewForHeader(const char *clsName) {
     IMP stub = imp_implementationWithBlock(^id(id slf, UITableView *tv, NSInteger section) {
         id r = orig ? ((id (*)(id, SEL, id, NSInteger))orig)(slf, s, tv, section) : nil;
         if (gLive && gMaster && !gSafe && [r isKindOfClass:[UIView class]]) {
-            @try { WDDecorateViewTree((UIView *)r, 0); } @catch (NSException *e) {}
+            @try {
+                const char *nm = class_getName(object_getClass(r));
+                if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner"))) WDDecorateViewTree((UIView *)r, 0);
+                else WDStyleClearHeader((UIView *)r);
+            } @catch (NSException *e) {}
         }
         return r;
     });
@@ -676,11 +866,15 @@ static void WDInstallTableDisplay(void) {
         "NewSettingViewController",
         "WCTableViewManager",
         "MMTableViewInfo",
+        "ContactTagListViewController",
+        "BrandContactsViewController",
+        "ContactsGenericViewController",
         NULL
     };
     for (int i = 0; kVCs[i]; i++) {
         WDHookWillDisplay(kVCs[i]);
         WDHookWillDisplayHeader(kVCs[i]);
+        WDHookWillDisplayFooter(kVCs[i]);
     }
     WDHookViewForHeader("NewMainFrameViewController");
     WDHookViewForHeader("MGSessionBoxViewController");
@@ -797,12 +991,22 @@ static void WDDecorateVisible(void) {
                 NSInteger sn = tv.numberOfSections;
                 for (NSInteger i = 0; i < sn && i < 32; i++) {
                     UIView *h = [tv headerViewForSection:i];
-                    if (h) @try { WDDecorateViewTree(h, 0); } @catch (NSException *e) {}
+                    if (h) {
+                        const char *hn = class_getName(object_getClass(h));
+                        @try {
+                            if (hn && strstr(hn, "FoldView")) WDDecorateViewTree(h, 0);
+                            else WDStyleClearHeader(h);
+                        } @catch (NSException *e) {}
+                    }
+                    UIView *f = [tv footerViewForSection:i];
+                    if (f) @try { WDStyleClearHeader(f); } @catch (NSException *e) {}
                 }
             } else {
                 const char *nm = class_getName(object_getClass(v));
-                if (nm && (strstr(nm, "FoldView") || strstr(nm, "MFBanner"))) {
+                if (nm && strstr(nm, "FoldView")) {
                     @try { WDDecorateViewTree(v, 0); } @catch (NSException *e) {}
+                } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "WCSearchBar"))) {
+                    @try { WDStyleSearch(v, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
                 }
             }
             if (v.subviews.count) [q addObjectsFromArray:v.subviews];

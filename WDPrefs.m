@@ -158,10 +158,9 @@ NSString *WDHexForColor(UIColor *c) {
 - (CGFloat)insetForClass:(NSString *)name def:(CGFloat)def {
     id v = [_ud objectForKey:WDInsKey(name)];
     if (v) return [v doubleValue];
-    // 气泡默认不缩进：defInset=0 且未自定义时保持 0
     if (def == 0 && ![self hasCustomInset:name]) {
         const WDItem *it = WDCatalogFind(name);
-        if (it && (it->kind == WDKindBubble || it->defInset == 0)) return 0;
+        if (it && it->defInset == 0) return 0;
     }
     if (def > 0) return def;
     return self.globalInset;

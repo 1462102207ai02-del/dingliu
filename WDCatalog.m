@@ -2,22 +2,18 @@
 #import <string.h>
 
 // 每条都有中文简称。defRadius/defInset = 0 表示跟随全局。
-// 气泡默认不缩进；顶栏/底栏/横幅默认半径略大于列表。
+// 不登记会话气泡。顶栏/底栏/横幅默认半径略大于列表。
 // 表按「页面顺序」排列：首页 → 通讯录 → 发现 → 我 → 聊天 → 搜索 → 钱包 → 通用。
 static const WDItem kItems[] = {
     // ===== 首页·微信 =====
     {"NewMainFrameCell",                  "MainFrameCell",  "会话行",     WDPageHome,     WDGroupList,   WDKindCell,   16, 12, 1},
-    {"MainFrameItemView",                 NULL,             "会话内容",   WDPageHome,     WDGroupList,   WDKindView,   16,  0, 1},
-    {"FakeMainFrameItemView",             NULL,             "会话内容备", WDPageHome,     WDGroupList,   WDKindView,   16,  0, 1},
     {"MainFrameSectionFoldView",          NULL,             "置顶横幅",   WDPageHome,     WDGroupBanner, WDKindBanner, 14, 12, 1},
-    {"MFBannerBtn",                       NULL,             "置顶横幅钮", WDPageHome,     WDGroupBanner, WDKindBanner, 14,  0, 1},
     {"MFWebMMBtn",                        NULL,             "网页登录钮", WDPageHome,     WDGroupBanner, WDKindBanner, 14,  0, 1},
     {"MultiDeviceCardView",               NULL,             "多设备卡",   WDPageHome,     WDGroupBanner, WDKindBanner, 14, 12, 1},
     {"WCSearchBar",                       NULL,             "首页搜索",   WDPageHome,     WDGroupSearch, WDKindView,   14, 12, 1},
 
     // ===== 通讯录 =====
     {"NewContactsItemCell",               NULL,             "联系人行",   WDPageContacts, WDGroupList,   WDKindCell,   14, 12, 1},
-    {"ContactsItemView",                  NULL,             "联系人内容", WDPageContacts, WDGroupList,   WDKindView,   14,  0, 1},
     {"NewContactsSearchPanelView",        NULL,             "联系人搜索", WDPageContacts, WDGroupSearch, WDKindView,   14, 12, 1},
     {"BrandProfileItemBaseCell",          NULL,             "公众号行",   WDPageContacts, WDGroupList,   WDKindCell,   14, 12, 1},
 
@@ -45,7 +41,7 @@ static const WDItem kItems[] = {
     {"WCFinderMyTabFinderCardView",       NULL,             "我的视频号", WDPageMe,       WDGroupFinder, WDKindView,   16, 12, 1},
     {"BrandMyTabEntranceCardView",        NULL,             "我的公众号", WDPageMe,       WDGroupFinder, WDKindView,   16, 12, 1},
 
-    // ===== 聊天 =====
+    // ===== 聊天（不碰气泡、不碰聊天行/聊天背景） =====
     {"MMNewMsgContentNavBar",             NULL,             "聊天顶栏",   WDPageChat,     WDGroupNav,    WDKindChrome, 16, 10, 1},
     {"MMMsgContentNavBar",                NULL,             "会话顶栏",   WDPageChat,     WDGroupNav,    WDKindChrome, 16, 10, 1},
     {"MMInputToolView",                   NULL,             "输入工具栏", WDPageChat,     WDGroupTab,    WDKindChrome, 16, 10, 1},
@@ -54,43 +50,9 @@ static const WDItem kItems[] = {
     {"QuickReplyMsgNotifyView",           NULL,             "快捷回复条", WDPageChat,     WDGroupBanner, WDKindBanner, 14, 12, 1},
     {"VoIPInvitationBreadthInviteView",   NULL,             "通话邀请条", WDPageChat,     WDGroupBanner, WDKindBanner, 14, 12, 1},
     {"VoIPInvitationBreadthQuickReplyView", NULL,           "通话快捷条", WDPageChat,     WDGroupBanner, WDKindBanner, 14, 12, 1},
-    {"ChatTableViewCell",                 NULL,             "聊天行",     WDPageChat,     WDGroupList,   WDKindCell,   16, 12, 1},
-    {"ChatRoomInvitationMultiMenuTableViewCell", NULL,      "群邀请行",   WDPageChat,     WDGroupList,   WDKindCell,   14, 12, 1},
     {"MMGrowTextView",                    NULL,             "输入框",     WDPageChat,     WDGroupInput,  WDKindView,   14, 10, 1},
     {"MMGrowTextViewWithExtras",          NULL,             "扩展输入框", WDPageChat,     WDGroupInput,  WDKindView,   14, 10, 1},
     {"MMInputMsgReferView",               NULL,             "引用条",     WDPageChat,     WDGroupInput,  WDKindView,   12, 10, 1},
-    {"TextMessageCellView",               NULL,             "文字气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 16,  0, 1},
-    {"CommonMessageCellView",             NULL,             "通用气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 16,  0, 1},
-    {"VoiceMessageCellView",              NULL,             "语音气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 16,  0, 1},
-    {"ImageMessageCellView",              NULL,             "图片气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 12,  0, 1},
-    {"VideoMessageCellView",              NULL,             "视频气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 12,  0, 1},
-    {"AppFileMessageCellView",            NULL,             "文件气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppFileMessageCellViewV2",          NULL,             "文件气泡2",  WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppRecordMessageCellView",          NULL,             "记录气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppRecordMessageCellViewClassic",   NULL,             "记录气泡经", WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppNoteMessageCellView",            NULL,             "笔记气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppNoteMessageCellViewClassic",     NULL,             "笔记气泡经", WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppUrlMessageCellViewClassic",      NULL,             "链接气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppUrlMessageImageView",            NULL,             "链接图",     WDPageChat,     WDGroupBubble, WDKindBubble, 10,  0, 1},
-    {"AppPatMessageCellView",             NULL,             "拍一拍",     WDPageChat,     WDGroupBubble, WDKindBubble, 12,  0, 1},
-    {"AppMMScheduleMessageCellView",      NULL,             "日程气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"AppWxGameCardMessageCellView",      NULL,             "游戏卡",     WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"ReaderMessageCellView",             NULL,             "图文气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"MultiReaderMessageCellView",        NULL,             "多图文",     WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"MultiColumnReaderMessageCellView",  NULL,             "多列图文",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"TextReaderMessageCellView",         NULL,             "文字图文",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"ReaderItemView",                    NULL,             "图文项",     WDPageChat,     WDGroupBubble, WDKindBubble, 12,  0, 1},
-    {"BizAppBaseMessageCellView",         NULL,             "公众号气泡", WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"BizAppReaderMessageBigPicView",     NULL,             "公众号大图", WDPageChat,     WDGroupBubble, WDKindBubble, 12,  0, 1},
-    {"MailMessageCellView",               NULL,             "邮件气泡",   WDPageChat,     WDGroupBubble, WDKindBubble, 14,  0, 1},
-    {"ChatTimeCellView",                  NULL,             "时间条",     WDPageChat,     WDGroupBubble, WDKindView,   10, 40, 1},
-    {"MsgMediaGroupCard",                 NULL,             "媒体组卡",   WDPageChat,     WDGroupBubble, WDKindView,   14, 10, 1},
-    {"WAAppPageCellView",                 NULL,             "小程序卡",   WDPageChat,     WDGroupBubble, WDKindView,   14, 10, 1},
-    {"WCFinderShareFeedCellView",         NULL,             "视频号分享", WDPageChat,     WDGroupBubble, WDKindView,   14, 10, 1},
-    {"WCFinderShareLiveCellView",         NULL,             "直播分享",   WDPageChat,     WDGroupBubble, WDKindView,   14, 10, 1},
-    {"NotifyLiveImageMessageCellView",    NULL,             "直播通知",   WDPageChat,     WDGroupBubble, WDKindView,   14, 10, 1},
-    {"AppHardWareRankMessageCellView",    NULL,             "硬件排行",   WDPageChat,     WDGroupBubble, WDKindView,   14, 10, 1},
-    {"WCPayRecepictReaderMessageCellView", NULL,            "支付回执",   WDPageChat,     WDGroupBubble, WDKindView,   14, 10, 1},
     {"SharePreConfirmSheetView",          NULL,             "转发确认",   WDPageChat,     WDGroupSheet,  WDKindView,   16, 12, 1},
     {"SharePreConfirmHeadView",           NULL,             "转发头",     WDPageChat,     WDGroupSheet,  WDKindView,   14, 12, 1},
     {"SharePreConfirmSuccessView",        NULL,             "转发成功",   WDPageChat,     WDGroupSheet,  WDKindView,   16, 12, 1},
@@ -121,7 +83,7 @@ static const WDItem kItems[] = {
     {"TipsView",                          NULL,             "提示条",     WDPageCommon,   WDGroupBanner, WDKindBanner, 12, 12, 1},
     {"MMTableViewCell",                   NULL,             "通用行",     WDPageCommon,   WDGroupList,   WDKindCell,   14, 12, 1},
     {"MMMultiMenuTableViewCell",          NULL,             "滑动行",     WDPageCommon,   WDGroupList,   WDKindCell,   14, 12, 1},
-    {"MMTableSectionHeaderView",          NULL,             "区头",       WDPageCommon,   WDGroupHeader, WDKindView,   10, 12, 1},
+    {"MMTableSectionHeaderView",          NULL,             "区头",       WDPageCommon,   WDGroupHeader, WDKindView,    0,  0, 0},
     {"MMToastView",                       NULL,             "轻提示",     WDPageCommon,   WDGroupToast,  WDKindView,   12,  0, 1},
     {"MMMenuContentView",                 NULL,             "长按菜单",   WDPageCommon,   WDGroupToast,  WDKindView,   14,  0, 1},
     {"MMActionSheetQRCodeRowView",        NULL,             "二维码行",   WDPageCommon,   WDGroupToast,  WDKindView,   12, 10, 1},
@@ -158,7 +120,6 @@ NSString *WDGroupTitle(int group) {
         case WDGroupList:   return @"列表";
         case WDGroupHeader: return @"区头";
         case WDGroupInput:  return @"输入";
-        case WDGroupBubble: return @"气泡";
         case WDGroupToast:  return @"提示";
         case WDGroupSheet:  return @"弹层";
         case WDGroupFinder: return @"视频号/朋友圈";
