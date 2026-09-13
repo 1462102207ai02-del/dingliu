@@ -27,14 +27,6 @@ static NSString *WDInsKey(NSString *n) { return [@"WD.i." stringByAppendingStrin
             @"WD.globalRadius": @14.0,
             @"WD.globalInset": @12.0,
         }];
-        int n = WDCatalogCount();
-        const WDItem *items = WDCatalogItems();
-        for (int i = 0; i < n; i++) {
-            NSString *name = @(items[i].cls);
-            if ([_ud objectForKey:WDOnKey(name)] == nil) {
-                [_ud setBool:items[i].defOn != 0 forKey:WDOnKey(name)];
-            }
-        }
     }
     return self;
 }

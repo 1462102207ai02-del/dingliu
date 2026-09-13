@@ -17,4 +17,6 @@
 
 安全模式：`defaults write com.tencent.xin WDSafeMode -bool YES`
 
-日志：微信沙盒 `Documents/WechatDuo.log`
+日志：微信沙盒 `Documents/WechatDuo.log`，以及 `TMPDIR/WechatDuo.log`
+
+v1.0.2：constructor 延迟安装；不 hook 系统类；layout 路径不写 frame。

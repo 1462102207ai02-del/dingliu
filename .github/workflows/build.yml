@@ -111,14 +111,15 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.1
-          name: WechatDuo v1.0.1
+          tag_name: v1.0.2
+          name: WechatDuo v1.0.2
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
-            - **v1.0.1 关键修复**：签名器把 `LC_UUID`(0x1B) 当成了 `LC_CODE_SIGNATURE`(0x1D)，
-              真签名命令 datasize 越出 EOF，ChOma/`ct_bypass` 报
-              `Error: no code signature found`。现按 0x1D / cmdsize=16 写入 SuperBlob。
+            - **v1.0.2 闪退修复**：constructor 不再同步 swizzle；不 hook 系统类；
+              只改本类方法；去掉 setFrame:；layout 路径不再写 frame（改 mask / 卡片底板）。
+              纯 C 日志写到 TMPDIR 与 Documents/WechatDuo.log。
+            - **v1.0.1**：签名器 LC_CODE_SIGNATURE=0x1D，TrollFools 可注入。
 
             - 顶栏 / 底栏 / 横幅 / 列表 / 搜索 / 输入 / 气泡 / 弹层 / 视频号 / 钱包
             - 每个类有中文简称，可单独开关、圆角、双侧缩进
@@ -128,7 +129,7 @@ jobs:
 
             注入：TrollFools 选择微信 → 注入 `WechatDuo.dylib` → 重启微信。
             设置入口：微信「我」页底部，或插件收纳里的 **WechatDuo**。
-            日志：微信沙盒 `Documents/WechatDuo.log`
+            日志：微信沙盒 `Documents/WechatDuo.log` 以及 TMPDIR/WechatDuo.log
             安全模式：`defaults write com.tencent.xin WDSafeMode -bool YES`
           files: |
             dist/WechatDuo.dylib

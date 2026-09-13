@@ -5,38 +5,7 @@
 static const void *kWDCardViewKey = &kWDCardViewKey;
 static BOOL gApplying = NO;
 
-static BOOL WDBusy(void) {
-    return gApplying;
-}
-
-static UIView *WDSuperviewForInset(UIView *v) {
-    UIView *p = v.superview;
-    if (!p) return nil;
-    // 导航栏/TabBar 的直接父视图经常和自身同宽，继续往上找到更宽的容器
-    CGFloat w = v.bounds.size.width;
-    UIView *best = p;
-    for (int i = 0; i < 6 && p; i++, p = p.superview) {
-        if (p.bounds.size.width > best.bounds.size.width + 1.0) best = p;
-        if (p.bounds.size.width >= w + 8.0) return p;
-    }
-    return best;
-}
-
-static UITableView *WDTableOfCell(UIView *cell) {
-    for (UIView *p = cell.superview; p; p = p.superview) {
-        if ([p isKindOfClass:[UITableView class]]) return (UITableView *)p;
-    }
-    return nil;
-}
-
-static NSIndexPath *WDIndexPath(UITableView *tv, UITableViewCell *cell) {
-    if (!tv || !cell) return nil;
-    NSIndexPath *ip = [tv indexPathForCell:cell];
-    if (ip) return ip;
-    // 即将展示但尚未入屏
-    CGPoint pt = [cell.superview convertPoint:cell.center toView:tv];
-    return [tv indexPathForRowAtPoint:pt];
-}
+static BOOL WDBusy(void) { return gApplying; }
 
 static void WDRoundLayer(CALayer *l, CGFloat r) {
     if (!l || r < 0) return;
@@ -51,25 +20,6 @@ static void WDRoundLayer(CALayer *l, CGFloat r) {
             }
         }
     }
-}
-
-static void WDFitInsetFrame(UIView *v, CGFloat inset) {
-    if (!v || inset <= 0) return;
-    UIView *parent = WDSuperviewForInset(v);
-    if (!parent) return;
-    CGRect pb = parent.bounds;
-    CGFloat newW = pb.size.width - inset * 2.0;
-    if (newW < 48.0) return;
-    CGRect f = v.frame;
-    // 相对父视图坐标重算，绝不在当前 frame 上累加
-    CGRect inParent = [v.superview convertRect:pb fromView:parent];
-    CGFloat newX = inParent.origin.x + inset;
-    if (fabs(f.origin.x - newX) < 0.5 && fabs(f.size.width - newW) < 0.5) return;
-    f.origin.x = newX;
-    f.size.width = newW;
-    gApplying = YES;
-    v.frame = f;
-    gApplying = NO;
 }
 
 static BOOL WDItemOn(const WDItem *it) {
@@ -87,42 +37,7 @@ static CGFloat WDItemInset(const WDItem *it) {
     return [[WDPrefs shared] insetForClass:@(it->cls) def:it->defInset];
 }
 
-#pragma mark - 顶栏 / 底栏
-
-void WDApplyChrome(UIView *view, const WDItem *item) {
-    if (!view || !item || WDBusy()) return;
-    if (!WDItemOn(item)) return;
-    WDFitInsetFrame(view, WDItemInset(item));
-    WDRoundLayer(view.layer, WDItemRadius(item));
-}
-
-#pragma mark - 横幅
-
-void WDApplyBanner(UIView *view, const WDItem *item) {
-    if (!view || !item || WDBusy()) return;
-    if (!WDItemOn(item)) return;
-    WDFitInsetFrame(view, WDItemInset(item));
-    WDRoundLayer(view.layer, WDItemRadius(item));
-}
-
-#pragma mark - 普通视图 / 气泡
-
-void WDApplyView(UIView *view, const WDItem *item) {
-    if (!view || !item || WDBusy()) return;
-    if (!WDItemOn(item)) return;
-    CGFloat inset = WDItemInset(item);
-    if (inset > 0) WDFitInsetFrame(view, inset);
-    WDRoundLayer(view.layer, WDItemRadius(item));
-}
-
-void WDApplyBubble(UIView *view, const WDItem *item) {
-    if (!view || !item || WDBusy()) return;
-    if (!WDItemOn(item)) return;
-    // 气泡只圆角，默认不缩进，避免把气泡挤成一条
-    WDRoundLayer(view.layer, WDItemRadius(item));
-}
-
-#pragma mark - 列表卡片底板
+#pragma mark - 卡片底板（不改宿主 frame）
 
 @interface WDCardPlate : UIView
 @property (nonatomic, strong) CAShapeLayer *fill;
@@ -173,55 +88,106 @@ void WDApplyBubble(UIView *view, const WDItem *item) {
 }
 @end
 
-static UIRectCorner WDCornersForCell(UITableView *tv, NSIndexPath *ip) {
-    // 默认每行独立成卡（四角圆角），和顶栏/底栏/横幅同一语言
-    (void)tv; (void)ip;
-    return UIRectCornerAllCorners;
+// 用 mask 做出双侧缩进+圆角，绝不写 view.frame
+static void WDMaskInsetRound(UIView *v, CGFloat inset, CGFloat radius) {
+    if (!v) return;
+    CGRect b = v.bounds;
+    if (b.size.width < 8 || b.size.height < 2) return;
+    CGFloat x = MAX(0, inset);
+    CGRect r = CGRectMake(x, 0, b.size.width - x * 2.0, b.size.height);
+    if (r.size.width < 24.0) {
+        v.layer.mask = nil;
+        WDRoundLayer(v.layer, radius);
+        return;
+    }
+    CAShapeLayer *mask = ([v.layer.mask isKindOfClass:[CAShapeLayer class]])
+        ? (CAShapeLayer *)v.layer.mask : [CAShapeLayer layer];
+    UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:r cornerRadius:radius];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    mask.frame = b;
+    mask.path = p.CGPath;
+    if (v.layer.mask != mask) v.layer.mask = mask;
+    [CATransaction commit];
 }
+
+static void WDClearMask(UIView *v) {
+    if (v.layer.mask) v.layer.mask = nil;
+}
+
+#pragma mark - 顶栏 / 底栏 / 横幅 / 普通视图
+
+void WDApplyChrome(UIView *view, const WDItem *item) {
+    if (!view || !item || WDBusy()) return;
+    if (!WDItemOn(item)) { WDClearMask(view); return; }
+    gApplying = YES;
+    WDMaskInsetRound(view, WDItemInset(item), WDItemRadius(item));
+    gApplying = NO;
+}
+
+void WDApplyBanner(UIView *view, const WDItem *item) {
+    if (!view || !item || WDBusy()) return;
+    if (!WDItemOn(item)) { WDClearMask(view); return; }
+    gApplying = YES;
+    WDMaskInsetRound(view, WDItemInset(item), WDItemRadius(item));
+    gApplying = NO;
+}
+
+void WDApplyView(UIView *view, const WDItem *item) {
+    if (!view || !item || WDBusy()) return;
+    if (!WDItemOn(item)) { WDClearMask(view); return; }
+    gApplying = YES;
+    CGFloat inset = WDItemInset(item);
+    if (inset > 0) WDMaskInsetRound(view, inset, WDItemRadius(item));
+    else {
+        WDClearMask(view);
+        WDRoundLayer(view.layer, WDItemRadius(item));
+    }
+    gApplying = NO;
+}
+
+void WDApplyBubble(UIView *view, const WDItem *item) {
+    if (!view || !item || WDBusy()) return;
+    if (!WDItemOn(item)) return;
+    gApplying = YES;
+    WDRoundLayer(view.layer, WDItemRadius(item));
+    gApplying = NO;
+}
+
+#pragma mark - 列表：底板缩进，cell.frame 不动
 
 void WDApplyCell(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, const WDItem *item) {
     if (!cell || !item || WDBusy()) return;
+    (void)tv; (void)ip;
     if (!WDItemOn(item)) return;
 
-    if (!tv) tv = WDTableOfCell(cell);
     CGFloat inset = WDItemInset(item);
-    if (tv && inset > 0) {
-        CGFloat tableW = tv.bounds.size.width;
-        CGFloat newW = tableW - inset * 2.0;
-        if (newW > 48.0) {
-            CGRect f = cell.frame;
-            // 相对 table 宽度重算
-            if (fabs(f.origin.x - inset) > 0.5 || fabs(f.size.width - newW) > 0.5) {
-                f.origin.x = inset;
-                f.size.width = newW;
-                gApplying = YES;
-                cell.frame = f;
-                gApplying = NO;
-            }
-        }
-    }
+    CGRect bounds = cell.bounds;
+    CGRect plateF = (inset > 0 && bounds.size.width > inset * 2 + 48)
+        ? UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(1.5, inset, 1.5, inset))
+        : bounds;
 
+    gApplying = YES;
     WDCardPlate *plate = objc_getAssociatedObject(cell, kWDCardViewKey);
     if (![plate isKindOfClass:[WDCardPlate class]]) {
-        plate = [[WDCardPlate alloc] initWithFrame:cell.bounds];
+        plate = [[WDCardPlate alloc] initWithFrame:plateF];
         objc_setAssociatedObject(cell, kWDCardViewKey, plate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         cell.backgroundView = plate;
         cell.backgroundColor = [UIColor clearColor];
-        if ([cell.contentView.backgroundColor isEqual:[UIColor whiteColor]] ||
-            cell.contentView.backgroundColor != nil) {
-            cell.contentView.backgroundColor = [UIColor clearColor];
-        }
+        UIColor *cvbg = cell.contentView.backgroundColor;
+        if (cvbg) cell.contentView.backgroundColor = [UIColor clearColor];
+    } else if (!CGRectEqualToRect(plate.frame, plateF)) {
+        plate.frame = plateF;
     }
-    plate.frame = cell.bounds;
-    plate.corners = WDCornersForCell(tv, ip ?: WDIndexPath(tv, cell));
+    plate.corners = UIRectCornerAllCorners;
     plate.radius = WDItemRadius(item);
     [plate redraw];
 
-    // 系统分割线藏掉，卡片自己就是边界
-    cell.separatorInset = UIEdgeInsetsMake(0, cell.bounds.size.width, 0, 0);
-    if ([cell respondsToSelector:@selector(setLayoutMargins:)]) {
-        cell.layoutMargins = UIEdgeInsetsZero;
+    UIEdgeInsets want = UIEdgeInsetsMake(0, bounds.size.width, 0, 0);
+    if (!UIEdgeInsetsEqualToEdgeInsets(cell.separatorInset, want)) {
+        cell.separatorInset = want;
     }
+    gApplying = NO;
 }
 
 void WDStyleVisibleTables(void) {
