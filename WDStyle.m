@@ -329,6 +329,10 @@ static UIColor *WDGapFillForView(UIView *view) {
         }
         sv = sv.superview;
     }
+    // 深色下 systemGroupedBackground 和首页会话底不是同一色，多设备卡会露灰块。
+    if (WDStyleDark()) {
+        if (@available(iOS 13.0, *)) return [UIColor systemBackgroundColor];
+    }
     return WDGroupedFill();
 }
 
@@ -447,17 +451,37 @@ static NSUInteger WDSectionCorners(UITableViewCell *cell) {
     return WDSectionCornersAt(tv, ip);
 }
 
+static BOOL WDLooksLikeHairline(UIView *v) {
+    if (!v) return NO;
+    CGFloat h = v.bounds.size.height;
+    CGFloat w = v.bounds.size.width;
+    CGFloat scale = [UIScreen mainScreen].scale;
+    CGFloat hair = (scale > 0.5) ? (1.0 / scale) : 0.5;
+    if (h > 0.2 && h <= hair + 0.75 && w >= 24) return YES;
+    if (w > 0.2 && w <= hair + 0.75 && h >= 24) return YES;
+    return NO;
+}
+
 static void WDHideLineViews(UIView *v, int depth) {
-    if (!v || depth > 3) return;
+    if (!v || depth > 6) return;
     const char *nm = class_getName(object_getClass(v));
     if (nm && (strstr(nm, "Separator") || strstr(nm, "separator") ||
                strstr(nm, "LineView") || strstr(nm, "lineView") ||
-               strstr(nm, "Dash") || strstr(nm, "_UITableViewCellSeparator"))) {
+               strstr(nm, "Dash") || strstr(nm, "dash") ||
+               strstr(nm, "_UITableViewCellSeparator") ||
+               strstr(nm, "bottomLine") || strstr(nm, "BottomLine") ||
+               strstr(nm, "topSeparator") || strstr(nm, "bottomSeparator"))) {
         v.hidden = YES;
         v.alpha = 0;
         return;
     }
-    if (depth < 2) {
+    if (depth > 0 && WDLooksLikeHairline(v) && ![v isKindOfClass:[UILabel class]] &&
+        ![v isKindOfClass:[UIImageView class]] && ![v isKindOfClass:[UIControl class]]) {
+        v.hidden = YES;
+        v.alpha = 0;
+        return;
+    }
+    if (depth < 5) {
         for (UIView *s in v.subviews) WDHideLineViews(s, depth + 1);
     }
 }
@@ -592,9 +616,10 @@ static void WDApplySelected(UITableViewCell *cell, CGFloat inset, CGFloat radius
 }
 
 static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
-    if (!cell || inset < 4) return;
-    // 只做光学内边距：头像略右、时间略左。禁止全量 inset 再叠一次。
-    CGFloat pad = MIN(8.0, inset * 0.45);
+    if (!cell || inset < 2) return;
+    // 内容跟卡片缩进走：transform 平移，禁止写 ItemView/content frame。
+    CGFloat pad = inset;
+    if (pad > 18.0) pad = 18.0;
     if (pad < 1.0) return;
     UIView *cv = cell.contentView ?: cell;
     for (UIView *sub in cv.subviews) {
@@ -699,8 +724,26 @@ void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
     }
-    view.backgroundColor = [UIColor clearColor];
-    view.opaque = NO;
+    const char *selfnm = class_getName(object_getClass(view));
+    BOOL multi = selfnm && strstr(selfnm, "MultiDevice");
+    view.backgroundColor = multi ? WDResolvedIn() : [UIColor clearColor];
+    view.opaque = multi;
+    if (multi) {
+        @try {
+            id login = [view valueForKey:@"deviceLoginContentView"];
+            if ([login isKindOfClass:[UIView class]]) {
+                ((UIView *)login).backgroundColor = WDResolvedIn();
+                ((UIView *)login).opaque = YES;
+            }
+        } @catch (NSException *e) {}
+        @try {
+            id manage = [view valueForKey:@"deviceManageContentView"];
+            if ([manage isKindOfClass:[UIView class]]) {
+                ((UIView *)manage).backgroundColor = WDResolvedIn();
+                ((UIView *)manage).opaque = YES;
+            }
+        } @catch (NSException *e) {}
+    }
     // 不 clip、不改子视图 frame —— 折叠横幅要点得着。
     WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
     (void)continuous;
@@ -743,6 +786,29 @@ static UIView *WDSearchInnerBox(UIView *view) {
     return nil;
 }
 
+static void WDSetSearchSpacer(UIView *bar, const char *key, CGFloat width) {
+    if (!bar || !key) return;
+    @try {
+        id sp = [bar valueForKey:[NSString stringWithUTF8String:key]];
+        if (![sp isKindOfClass:[UIView class]]) return;
+        UIView *spacer = (UIView *)sp;
+        CGRect f = spacer.frame;
+        if (fabs(f.size.width - width) > 0.5) {
+            f.size.width = width;
+            spacer.frame = f;
+        }
+        NSLayoutConstraint *w = nil;
+        for (NSLayoutConstraint *c in spacer.constraints) {
+            if (c.firstAttribute == NSLayoutAttributeWidth && c.secondItem == nil) { w = c; break; }
+        }
+        if (w) {
+            if (fabs(w.constant - width) > 0.5) w.constant = width;
+        } else {
+            [spacer.widthAnchor constraintEqualToConstant:width].active = YES;
+        }
+    } @catch (NSException *e) {}
+}
+
 void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!view) return;
     if (WDStyleShouldSkip(view)) return;
@@ -751,8 +817,7 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
-    // 禁止写 layoutMargins：占位会被挤到放大镜上。
-    // 内层胶囊作为整体左右内收，icon 与占位相对位置保持原生。
+    // 禁止写 layoutMargins（占位贴放大镜）；禁止写 searchBox.frame（Auto Layout 会还原）。
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
@@ -760,36 +825,94 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     view.backgroundColor = [UIColor clearColor];
     view.opaque = NO;
     view.clipsToBounds = NO;
+    if (inx > 0.5) {
+        WDSetSearchSpacer(view, "leftBoxSpacer", inx);
+        WDSetSearchSpacer(view, "rightBoxSpacer", inx);
+    }
     UIView *box = WDSearchInnerBox(view);
     if (box && box != view) {
-        if (inx > 0.5) {
-            UIView *host = box.superview ?: view;
-            CGRect space = (host == view) ? bounds : host.bounds;
-            if (!objc_getAssociatedObject(box, kWDSearchBoxFrameKey)) {
-                objc_setAssociatedObject(box, kWDSearchBoxFrameKey, [NSValue valueWithCGRect:box.frame], WD_ASSOC);
-            }
-            CGRect bf = box.frame;
-            CGFloat w = space.size.width - inx * 2.0;
-            if (w < 40) w = space.size.width;
-            CGRect want = CGRectMake(inx, bf.origin.y, w, bf.size.height > 8 ? bf.size.height : space.size.height);
-            if (fabs(bf.origin.x - want.origin.x) > 0.5 || fabs(bf.size.width - want.size.width) > 0.5) {
-                box.frame = want;
-            }
-        }
         CGFloat br = MIN(radius, box.bounds.size.height > 1 ? box.bounds.size.height / 2.0 : radius);
         WDStyleRound(box, br, continuous, tag);
         if (gColMaster && gInOn) {
             UIColor *inC = WDResolvedIn();
             if (inC) box.backgroundColor = inC;
         }
+        // 有内层胶囊时不对外层打孔，否则会盖住放大镜。缩进靠 spacer。
         return;
     }
-    if ([view isKindOfClass:[UISearchBar class]]) return;
-    if (inx <= 0.5) WDStyleRound(view, MIN(radius, view.bounds.size.height / 2.0), continuous, tag);
+    if ([view isKindOfClass:[UISearchBar class]]) {
+        if (inx > 0.5) WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+        return;
+    }
+    if (inx > 0.5) WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+    else WDStyleRound(view, MIN(radius, view.bounds.size.height / 2.0), continuous, tag);
+}
+
+void WDStyleFold(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
+    if (!view) return;
+    CGRect bounds = view.bounds;
+    if (bounds.size.width < 24 || bounds.size.height < 8) return;
+    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+    CGFloat inx = MAX(0, inset);
+    if (inx > 0 && bounds.size.width <= inx * 2 + 24) inx = 0;
+    if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
+        UIColor *oc = view.backgroundColor;
+        objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
+    }
+    view.backgroundColor = [UIColor clearColor];
+    view.opaque = NO;
+    view.clipsToBounds = NO;
+    @try {
+        id btn = [view valueForKey:@"bannerBtn"];
+        if ([btn isKindOfClass:[UIView class]]) {
+            ((UIView *)btn).backgroundColor = [UIColor clearColor];
+            ((UIView *)btn).opaque = NO;
+        }
+    } @catch (NSException *e) {}
+    @try {
+        id top = [view valueForKey:@"topSeparatorView"];
+        if ([top isKindOfClass:[UIView class]]) { ((UIView *)top).hidden = YES; ((UIView *)top).alpha = 0; }
+    } @catch (NSException *e) {}
+    @try {
+        id bot = [view valueForKey:@"bottomSeparatorView"];
+        if ([bot isKindOfClass:[UIView class]]) { ((UIView *)bot).hidden = YES; ((UIView *)bot).alpha = 0; }
+    } @catch (NSException *e) {}
+    WDHideLineViews(view, 0);
+    WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+    (void)continuous;
+}
+
+void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
+    if (!view) return;
+    CGRect bounds = view.bounds;
+    if (bounds.size.width < 40 || bounds.size.height < 24) return;
+    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+    CGFloat inx = MAX(0, inset);
+    if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
+    if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
+        UIColor *oc = view.backgroundColor;
+        objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
+    }
+    view.backgroundColor = WDResolvedIn();
+    view.opaque = YES;
+    view.clipsToBounds = NO;
+    @try {
+        id bg = [view valueForKey:@"backgroundView"];
+        if ([bg isKindOfClass:[UIView class]]) {
+            ((UIView *)bg).backgroundColor = WDResolvedIn();
+            ((UIView *)bg).opaque = YES;
+        }
+    } @catch (NSException *e) {}
+    @try {
+        id sep = [view valueForKey:@"topSeparator"];
+        if ([sep isKindOfClass:[UIView class]]) { ((UIView *)sep).hidden = YES; ((UIView *)sep).alpha = 0; }
+    } @catch (NSException *e) {}
+    WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+    (void)continuous;
 }
 
 static void WDClearHeaderRecur(UIView *v, int depth) {
-    if (!v || depth > 3) return;
+    if (!v || depth > 5) return;
     v.backgroundColor = [UIColor clearColor];
     v.opaque = NO;
     const char *nm = class_getName(object_getClass(v));
@@ -797,6 +920,12 @@ static void WDClearHeaderRecur(UIView *v, int depth) {
         if ([v isKindOfClass:[UIImageView class]]) ((UIImageView *)v).image = nil;
     }
     if (nm && (strstr(nm, "Separator") || strstr(nm, "LineView") || strstr(nm, "lineView") || strstr(nm, "Dash"))) {
+        v.hidden = YES;
+        v.alpha = 0;
+        return;
+    }
+    if (depth > 0 && WDLooksLikeHairline(v) && ![v isKindOfClass:[UILabel class]] &&
+        ![v isKindOfClass:[UIControl class]]) {
         v.hidden = YES;
         v.alpha = 0;
         return;
@@ -913,8 +1042,8 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
             cell.accessoryView.hidden = YES;
             cell.accessoryView.alpha = 0;
         }
-        WDBalanceInner(cell, inx);
     }
+    WDBalanceInner(cell, inx);
     WDApplySelected(cell, inx, radius, corners);
     (void)continuous;
 }

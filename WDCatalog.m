@@ -40,6 +40,7 @@ static const WDItem kItems[] = {
     {"StorageDeleteInfoCell",             NULL,             "存储行",     WDPageMe,       WDGroupList,   WDKindCell,   14, 12, 1},
     {"WCFinderMyTabFinderCardView",       NULL,             "我的视频号", WDPageMe,       WDGroupFinder, WDKindView,   16, 12, 1},
     {"BrandMyTabEntranceCardView",        NULL,             "我的公众号", WDPageMe,       WDGroupFinder, WDKindView,   16, 12, 1},
+    {"TextStateProfileCardContentView",   NULL,             "我页资料卡", WDPageMe,       WDGroupBanner, WDKindView,   16, 12, 1},
 
     // ===== 聊天（不碰气泡、不碰聊天行/聊天背景） =====
     {"MMNewMsgContentNavBar",             NULL,             "聊天顶栏",   WDPageChat,     WDGroupNav,    WDKindChrome, 16, 10, 1},

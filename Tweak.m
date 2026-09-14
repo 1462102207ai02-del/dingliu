@@ -318,6 +318,17 @@ static void WDDecorate(id self, int idx) {
         WDStyleClearHeader(v);
         return;
     }
+    {
+        const char *nm = class_getName(object_getClass(v));
+        if (nm && strstr(nm, "FoldView")) {
+            WDStyleFold(v, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
+            return;
+        }
+        if (nm && strstr(nm, "TextStateProfileCard")) {
+            WDStyleProfile(v, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
+            return;
+        }
+    }
     if ([v isKindOfClass:[UITableViewCell class]]) {
         WDStyleCell((UITableViewCell *)v, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
         return;
@@ -568,6 +579,8 @@ static void WDPageBgApply(void) {
     if (!tab) return;
     NSArray *vcs = tab.viewControllers;
     if (vcs.count < 4) return;
+    NSUInteger sel = tab.selectedIndex;
+    if (sel > 3) sel = 0;
     for (int i = 0; i < 4; i++) {
         UIViewController *vc = vcs[(NSUInteger)i];
         if (![vc isKindOfClass:[UIViewController class]]) continue;
@@ -575,8 +588,11 @@ static void WDPageBgApply(void) {
         if ([vc isKindOfClass:[UINavigationController class]]) {
             UINavigationController *nav = (UINavigationController *)vc;
             root = nav.viewControllers.firstObject;
-            // 只染该 Tab 的根页面，push 进去的子页面保持原样
+            if ((NSUInteger)i != sel) continue;
+            // 只染当前选中 Tab 的根页面，push 进去的子页面保持原样
             if (nav.topViewController != root) { WDPaintTree(root, nil); continue; }
+        } else if ((NSUInteger)i != sel) {
+            continue;
         }
         if (!root || WDIsOurController(root) || WDIsPluginStorage(root) || WDIsChatController(root)) {
             WDPaintTree(root, nil);
@@ -610,10 +626,7 @@ static void WDPageBgStart(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         WDPageBgApply();
-        NSTimer *t = [NSTimer timerWithTimeInterval:2.0 repeats:YES block:^(NSTimer * _Nonnull timer) {
-            @try { WDPageBgApply(); } @catch (NSException *e) {}
-        }];
-        [[NSRunLoop mainRunLoop] addTimer:t forMode:NSRunLoopCommonModes];
+        // 不再每 2 秒刷全部 4 个 Tab，切页闪烁就是这么来的。
     });
 }
 
@@ -806,7 +819,10 @@ static void WDDecorateViewTree(UIView *v, int depth) {
         const char *nm = class_getName(object_getClass(v));
         if (nm && strstr(nm, "FoldView")) {
             if (gDefBannerIdx == -2) gDefBannerIdx = WDIndexOfClassName("MainFrameSectionFoldView");
-            if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) WDDecorate(v, gDefBannerIdx);
+            if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) WDStyleFold(v, gSnap[gDefBannerIdx].i, gSnap[gDefBannerIdx].r, gContinuous, gDefBannerIdx);
+        } else if (nm && strstr(nm, "TextStateProfileCard")) {
+            int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+            if (pidx >= 0 && gSnap[pidx].on) WDStyleProfile(v, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
         } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "WCSearchBar") ||
                           strstr(nm, "MMUISearchBar") || strstr(nm, "SearchPanel") ||
                           strstr(nm, "FavSearchBar"))) {
@@ -885,6 +901,10 @@ static BOOL WDHookWillDisplayFooter(const char *clsName) {
 }
 
 static BOOL WDHookFoldUpdate(void);
+static void WDClearCountOnOwner(UIViewController *own);
+static BOOL WDHookFoldState(void);
+static BOOL WDHookTabSelect(void);
+static BOOL WDHookTabAppear(const char *clsName);
 
 static BOOL WDHookViewForHeader(const char *clsName) {
     Class cls = objc_getClass(clsName);
@@ -985,6 +1005,32 @@ static BOOL WDHookFooterHeight(const char *clsName) {
     return ok;
 }
 
+static BOOL WDHookInitCountLabel(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(initCountLabel:);
+    if (!WDOwns(cls, s)) return NO;
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return NO;
+    static Class hooked[8];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = method_getImplementation(m);
+    IMP stub = imp_implementationWithBlock(^(id slf, id arg) {
+        if (orig) ((void (*)(id, SEL, id))orig)(slf, s, arg);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try {
+            if ([arg isKindOfClass:[UIView class]]) WDStyleClearHeader((UIView *)arg);
+            WDClearCountOnOwner([slf isKindOfClass:[UIViewController class]] ? (UIViewController *)slf : nil);
+        } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
+    if (hookedN < 8) hooked[hookedN++] = cls;
+    return YES;
+}
+
 static void WDInstallTableDisplay(void) {
     static const char *kVCs[] = {
         "NewMainFrameViewController",
@@ -1009,6 +1055,7 @@ static void WDInstallTableDisplay(void) {
         WDHookWillDisplay(kVCs[i]);
         WDHookWillDisplayHeader(kVCs[i]);
         WDHookWillDisplayFooter(kVCs[i]);
+        WDHookInitCountLabel(kVCs[i]);
     }
     WDHookViewForHeader("NewMainFrameViewController");
     WDHookViewForHeader("MGSessionBoxViewController");
@@ -1018,6 +1065,12 @@ static void WDInstallTableDisplay(void) {
     WDHookHeaderHeight("ContactsViewController");
     WDHookFooterHeight("ContactsViewController");
     WDHookFoldUpdate();
+    WDHookFoldState();
+    WDHookTabSelect();
+    WDHookTabAppear("NewMainFrameViewController");
+    WDHookTabAppear("ContactsViewController");
+    WDHookTabAppear("FindFriendEntryViewController");
+    WDHookTabAppear("MoreViewController");
 }
 
 static BOOL WDHookFoldUpdate(void) {
@@ -1046,6 +1099,81 @@ static BOOL WDHookFoldUpdate(void) {
     if (!stub) return NO;
     method_setImplementation(m, stub);
     return YES;
+}
+
+static BOOL WDHookFoldState(void) {
+    Class cls = objc_getClass("MainFrameSectionFoldView");
+    if (!cls) return NO;
+    SEL s = @selector(setIsFolding:foldCount:);
+    if (!WDOwns(cls, s)) return NO;
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return NO;
+    static IMP orig = NULL;
+    if (orig) return YES;
+    orig = method_getImplementation(m);
+    IMP stub = imp_implementationWithBlock(^(id slf, BOOL folding, long long count) {
+        if (orig) ((void (*)(id, SEL, BOOL, long long))orig)(slf, s, folding, count);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        if (![slf isKindOfClass:[UIView class]]) return;
+        if (gDefBannerIdx == -2) gDefBannerIdx = WDIndexOfClassName("MainFrameSectionFoldView");
+        if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) {
+            @try { WDStyleFold((UIView *)slf, gSnap[gDefBannerIdx].i, gSnap[gDefBannerIdx].r, gContinuous, gDefBannerIdx); } @catch (NSException *e) {}
+        }
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
+    return YES;
+}
+
+static BOOL WDHookTabSelect(void) {
+    Class cls = objc_getClass("MMTabBarController");
+    if (!cls) return NO;
+    SEL s = @selector(setSelectedIndex:);
+    Method m = class_getInstanceMethod(cls, s);
+    static IMP orig = NULL;
+    if (orig) return YES;
+    orig = m ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf, NSUInteger idx) {
+        if (orig) ((void (*)(id, SEL, NSUInteger))orig)(slf, s, idx);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { WDPageBgApply(); } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:Q";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    return ok;
+}
+
+static BOOL WDHookTabAppear(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(viewDidAppear:);
+    Method m = class_getInstanceMethod(cls, s);
+    static Class hooked[8];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf, BOOL animated) {
+        if (orig) ((void (*)(id, SEL, BOOL))orig)(slf, s, animated);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { WDPageBgApply(); } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:B";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 8) hooked[hookedN++] = cls;
+    return ok;
 }
 
 #pragma mark - 安装
@@ -1131,12 +1259,14 @@ static void WDClearCountOnOwner(UIViewController *own) {
         if ([lab isKindOfClass:[UIView class]]) WDStyleClearHeader((UIView *)lab);
     } @catch (NSException *e) {}
     if (!own.isViewLoaded || !own.view) return;
+    NSMutableArray *tvs = [NSMutableArray array];
     NSMutableArray *q = [NSMutableArray arrayWithObject:own.view];
     int n = 0;
-    while (q.count && n < 80) {
+    while (q.count && n < 120) {
         UIView *sv = q.firstObject;
         [q removeObjectAtIndex:0];
         n++;
+        if ([sv isKindOfClass:[UITableView class]]) [tvs addObject:sv];
         const char *sn = class_getName(object_getClass(sv));
         BOOL named = sn && (strstr(sn, "Count") || strstr(sn, "countLabel") ||
                             strstr(sn, "countLab") || strstr(sn, "BottomCount") ||
@@ -1148,11 +1278,19 @@ static void WDClearCountOnOwner(UIViewController *own) {
                                   [txt containsString:@"个公众号"] ||
                                   [txt containsString:@"个朋友"] ||
                                   [txt containsString:@"个联系人"] ||
-                                  [txt containsString:@"个群聊"]))) {
+                                  [txt containsString:@"个群聊"] ||
+                                  [txt containsString:@"位朋友"]))) {
                 @try { WDStyleClearHeader(sv); } @catch (NSException *ex) {}
             }
         }
-        if (sv.subviews.count && n < 60) [q addObjectsFromArray:sv.subviews];
+        if (sv.subviews.count && n < 90) [q addObjectsFromArray:sv.subviews];
+    }
+    for (UITableView *tv in tvs) {
+        UIView *fv = tv.tableFooterView;
+        if (!fv) continue;
+        @try { WDStyleClearHeader(fv); } @catch (NSException *e) {}
+        fv.backgroundColor = [UIColor clearColor];
+        fv.opaque = NO;
     }
 }
 
@@ -1206,6 +1344,11 @@ static void WDDecorateVisible(void) {
                 const char *nm = class_getName(object_getClass(v));
                 if (nm && strstr(nm, "FoldView")) {
                     @try { WDDecorateViewTree(v, 0); } @catch (NSException *e) {}
+                } else if (nm && strstr(nm, "TextStateProfileCard")) {
+                    int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+                    if (pidx >= 0 && gSnap[pidx].on) {
+                        @try { WDStyleProfile(v, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+                    }
                 } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "SearchPanel") || strstr(nm, "FavSearchBar"))) {
                     @try { WDStyleSearch(v, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
                 }
