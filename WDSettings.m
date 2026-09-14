@@ -1,9 +1,3 @@
-// WechatDuo 设置页
-// v1.1.4 / v1.1.3
-//   - 总开关单独一行；所有子开关显示 master && 自身状态
-//   - 页面背景色改开关，打开后展开浅色/深色两行（只预览色块）
-//   - 开关和数值改完立刻生效
-
 #import "WDSettings.h"
 #import "WDPrefs.h"
 #import "WDCatalog.h"
@@ -49,7 +43,6 @@
     [super layoutSubviews];
     UIView *cv = self.contentView;
     CGFloat w = cv.bounds.size.width, h = cv.bounds.size.height;
-    // 全局 prefs 通知会 setNeedsLayout；宽度还没算完时不要把标题写死到右边。
     if (w < 80 || h < 20) return;
     CGFloat right = 14;
     if (self.sw) {

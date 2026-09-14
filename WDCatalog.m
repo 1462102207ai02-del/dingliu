@@ -1,9 +1,6 @@
 #import "WDCatalog.h"
 #import <string.h>
 
-// 每条都有中文简称。defRadius/defInset = 0 表示跟随全局。
-// 不登记会话气泡。顶栏/底栏/横幅默认半径略大于列表。
-// 表按「页面顺序」排列：首页 → 通讯录 → 发现 → 我 → 聊天 → 搜索 → 钱包 → 通用。
 static const WDItem kItems[] = {
     // ===== 首页·微信 =====
     {"NewMainFrameCell",                  "MainFrameCell",  "会话行",     WDPageHome,     WDGroupList,   WDKindCell,   16, 12, 1},
@@ -82,7 +79,7 @@ static const WDItem kItems[] = {
     {"TipsView",                          NULL,             "提示条",     WDPageCommon,   WDGroupBanner, WDKindBanner, 12, 12, 1},
     {"MMTableViewCell",                   NULL,             "通用行",     WDPageCommon,   WDGroupList,   WDKindCell,   14, 12, 1},
     {"MMMultiMenuTableViewCell",          NULL,             "滑动行",     WDPageCommon,   WDGroupList,   WDKindCell,   14, 12, 1},
-    {"MMTableSectionHeaderView",          NULL,             "区头",       WDPageCommon,   WDGroupHeader, WDKindView,    0,  0, 0},
+    {"MMTableSectionHeaderView",          NULL,             "区头",       WDPageCommon,   WDGroupHeader, WDKindView,    0,  0, 1},
     {"MMToastView",                       NULL,             "轻提示",     WDPageCommon,   WDGroupToast,  WDKindView,   12,  0, 1},
     {"MMMenuContentView",                 NULL,             "长按菜单",   WDPageCommon,   WDGroupToast,  WDKindView,   14,  0, 1},
     {"MMActionSheetQRCodeRowView",        NULL,             "二维码行",   WDPageCommon,   WDGroupToast,  WDKindView,   12, 10, 1},

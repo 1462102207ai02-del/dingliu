@@ -5,7 +5,6 @@
 
 extern NSString *const WDPrefsDidChangeNotification;
 
-// #RRGGBB / #AARRGGBB
 UIColor *WDColorForHex(NSString *hex);
 NSString *WDHexForColor(UIColor *c);
 
@@ -33,7 +32,6 @@ NSString *WDHexForColor(UIColor *c);
 - (void)reload;
 - (void)ping;
 
-// 卡片外背景色（页面/灰缝，覆盖旧「页面背景色」）
 - (BOOL)bgEnabled;
 - (void)setBgEnabled:(BOOL)on;
 - (NSString *)bgHexDark:(BOOL)dark;

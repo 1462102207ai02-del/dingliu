@@ -1,9 +1,3 @@
-// WechatDuo — 微信全页面卡片化
-// v1.1.12：置顶横幅清底无残角；多设备卡只缩进还原生色；搜索栏去双层；卡片内边距加大；我页资料卡打孔；点击高亮充满卡片栏。
-//
-// 视觉：连续圆角 + 分区级卡片（双侧缩进，只有首尾四角）。
-// 热路径约束：不设 layer.mask、不写 content frame、不分配 NSString。
-
 #ifndef WDCommon_h
 #define WDCommon_h
 
@@ -13,26 +7,24 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-#define WD_VERSION_C    "1.1.12"
+#define WD_VERSION_C    "1.1.13"
 #define WD_VERSION      @WD_VERSION_C
 #define WD_DISPLAY_NAME @"WechatDuo"
 #define WD_SETTINGS_CLS @"WDSettingsController"
 #define WD_LOG_NAME     @"WechatDuo.log"
 
-// 设置项分类：按微信页面顺序排列
 typedef NS_ENUM(NSInteger, WDPage) {
-    WDPageHome     = 0,   // 首页·微信
-    WDPageContacts = 1,   // 通讯录
-    WDPageDiscover = 2,   // 发现·朋友圈·视频号
-    WDPageMe       = 3,   // 我
-    WDPageChat     = 4,   // 聊天
-    WDPageSearch   = 5,   // 搜索
-    WDPagePay      = 6,   // 钱包·支付
-    WDPageCommon   = 7,   // 通用·浮层
+    WDPageHome     = 0,
+    WDPageContacts = 1,
+    WDPageDiscover = 2,
+    WDPageMe       = 3,
+    WDPageChat     = 4,
+    WDPageSearch   = 5,
+    WDPagePay      = 6,
+    WDPageCommon   = 7,
     WDPageCount    = 8
 };
 
-// 元素类型（详情页展示用）
 typedef NS_ENUM(NSInteger, WDGroup) {
     WDGroupNav     = 0,
     WDGroupTab     = 1,
@@ -58,18 +50,17 @@ typedef NS_ENUM(NSInteger, WDKind) {
 };
 
 typedef struct {
-    const char *cls;    // 主类名
-    const char *alias;  // 备选类名（版本间改名），可空
-    const char *zh;     // 中文简称
-    int page;           // 所属页面（WDPage）
-    int group;          // 元素类型（WDGroup）
-    int kind;           // 装饰方式（WDKind）
+    const char *cls;
+    const char *alias;
+    const char *zh;
+    int page;
+    int group;
+    int kind;
     float defRadius;
     float defInset;
     int   defOn;
 } WDItem;
 
-// 四个 Tab（微信 / 通讯录 / 发现 / 我）→ 页面编号
 static inline int WDPageForTabIndex(int tabIndex) {
     switch (tabIndex) {
         case 0: return (int)WDPageHome;
