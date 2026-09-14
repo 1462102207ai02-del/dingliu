@@ -111,11 +111,19 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.7
-          name: WechatDuo v1.1.7
+          tag_name: v1.1.8
+          name: WechatDuo v1.1.8
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.8**
+              - 卡片内只做光学内边距（头像/昵称/摘要略右、时间略左），不再双重全量 inset
+              - 通讯录底部统计及五大类二级页底部统计全透明
+              - 全局分割线隐藏原生线，卡片内分割线居中
+              - 「我」页 / 「我-设置」恢复分区卡片打孔；不刷导航栏灰条
+              - 「我-服务」与钱包首页去掉单按钮圆角，整片卡片化
+              - 首页真假导航栏都不上色，上滑不再多出一条
+              - 通讯录及其他页搜索栏缩进+圆角跟全局卡片一致
             - **v1.1.7**
               - 卡片缩进时，行内头像/时间/文字同步内收（transform，不写 frame）
               - 首页搜索栏缩进跟全局卡片一致，只圆内层 searchBox

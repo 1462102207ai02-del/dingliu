@@ -11,6 +11,7 @@ void WDStyleCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, BOOL cont
 void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 void WDStyleClearHeader(UIView *view);
+void WDStyleHostCard(UIView *host, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 
 // 设置页自身卡片化：圆角 + 双侧缩进 + 分区内首尾圆角
 void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL continuous);

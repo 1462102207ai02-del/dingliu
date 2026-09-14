@@ -36,7 +36,7 @@ static const WDItem kItems[] = {
     {"TingSharedAudioView",               NULL,             "听一听",     WDPageDiscover, WDGroupFinder, WDKindView,   12, 10, 1},
 
     // ===== 我 =====
-    {"ThirdPartyServiceListCell",         NULL,             "服务行",     WDPageMe,       WDGroupList,   WDKindCell,   14, 12, 1},
+    {"ThirdPartyServiceListCell",         NULL,             "服务行",     WDPageMe,       WDGroupList,   WDKindCell,   14, 12, 0},
     {"StorageDeleteInfoCell",             NULL,             "存储行",     WDPageMe,       WDGroupList,   WDKindCell,   14, 12, 1},
     {"WCFinderMyTabFinderCardView",       NULL,             "我的视频号", WDPageMe,       WDGroupFinder, WDKindView,   16, 12, 1},
     {"BrandMyTabEntranceCardView",        NULL,             "我的公众号", WDPageMe,       WDGroupFinder, WDKindView,   16, 12, 1},
@@ -67,9 +67,9 @@ static const WDItem kItems[] = {
 
     // ===== 钱包·支付 =====
     {"WCPayWalletEntryHeaderView",        NULL,             "钱包头",     WDPagePay,      WDGroupPay,    WDKindView,   16, 12, 1},
-    {"WCPayWalletDecorationView",         NULL,             "钱包装饰",   WDPagePay,      WDGroupPay,    WDKindView,   14, 12, 1},
-    {"WCPayWalletBusinessSectionHeader",  NULL,             "钱包分区",   WDPagePay,      WDGroupPay,    WDKindView,   10, 12, 1},
-    {"WCPayWalletBusinessCell",           NULL,             "钱包行",     WDPagePay,      WDGroupList,   WDKindCell,   14, 12, 1},
+    {"WCPayWalletDecorationView",         NULL,             "钱包装饰",   WDPagePay,      WDGroupPay,    WDKindView,   14, 12, 0},
+    {"WCPayWalletBusinessSectionHeader",  NULL,             "钱包分区",   WDPagePay,      WDGroupPay,    WDKindView,   10, 12, 0},
+    {"WCPayWalletBusinessCell",           NULL,             "钱包行",     WDPagePay,      WDGroupList,   WDKindCell,   14, 12, 0},
     {"WCPayDecimalKeyboardView",          NULL,             "金额键盘",   WDPagePay,      WDGroupPay,    WDKindView,   16,  8, 1},
     {"WCPayFaceHBPayView",                NULL,             "面对面红包", WDPagePay,      WDGroupPay,    WDKindView,   16, 12, 1},
 

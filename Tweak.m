@@ -303,6 +303,10 @@ static void WDDecorate(id self, int idx) {
         return;
     }
     if (gSnap[idx].kind == WDKindChrome) {
+        const char *nm = class_getName(object_getClass(v));
+        // 顶栏本身不单独圆角/缩进，否则上滑会多出一条。
+        if (nm && (strstr(nm, "NavigationBar") || strstr(nm, "BarBackground") ||
+                   strstr(nm, "BarContent") || strstr(nm, "CustomBar"))) return;
         WDStyleRound(v, gSnap[idx].r, gContinuous, idx);
         return;
     }
@@ -466,13 +470,9 @@ static BOOL WDIsMeController(UIViewController *vc) {
 
 static void WDPaintNavChrome(UIViewController *vc, UIColor *want) {
     if (!vc) return;
-    // 首页顶栏/搜索/+ 号是一体：不要单独给 fakeNavBar / TopHeader 上色，上滑时会多出一条。
-    if (WDIsHomeController(vc)) {
-        UINavigationController *nav = vc.navigationController;
-        if (nav && nav.navigationBar) WDPaintView(nav.navigationBar, want);
-        return;
-    }
-    // 「我」页顶部灰条来自 table 分组底 + 导航栏被刷成 grouped。这里只刷页面底，不刷导航栏。
+    // 首页顶栏/搜索/+ 是一体：真假导航栏都不上色，上滑才不会多出一条。
+    if (WDIsHomeController(vc)) return;
+    // 「我」页不刷导航栏，避免顶部灰条。
     if (WDIsMeController(vc)) return;
     UINavigationController *nav = vc.navigationController;
     if (nav) {
@@ -501,16 +501,22 @@ static void WDPaintTree(UIViewController *vc, UIColor *want) {
         WDPaintNavChrome(vc, want);
         return;
     }
+    if (WDIsHomeController(vc)) {
+        // 只刷会话列表底。不刷 vc.view / 真导航栏 / fakeNav / + 号。
+        for (UIView *s in vc.view.subviews) {
+            if ([s isKindOfClass:[UITableView class]]) WDPaintView(s, want);
+        }
+        return;
+    }
     WDPaintView(vc.view, want);
     WDPaintNavChrome(vc, want);
-    if (WDIsHomeController(vc)) return;
     for (UIView *s in vc.view.subviews) {
-        if ([s isKindOfClass:[UIScrollView class]]) WDPaintView(s, want);
         const char *nm = class_getName(object_getClass(s));
         if (nm && (strstr(nm, "RightTopMenu") || strstr(nm, "BarItemCustom") ||
                    strstr(nm, "MMBarButton") || strstr(nm, "MFTitleView") ||
                    strstr(nm, "CustomBar") || strstr(nm, "TopHeader") ||
-                   strstr(nm, "fakeNav"))) continue;
+                   strstr(nm, "fakeNav") || strstr(nm, "NavigationBar"))) continue;
+        if ([s isKindOfClass:[UIScrollView class]]) WDPaintView(s, want);
         if (nm && strstr(nm, "SearchBar")) {
             WDPaintView(s, want);
         }
@@ -778,9 +784,12 @@ static void WDDecorateViewTree(UIView *v, int depth) {
         if (nm && strstr(nm, "FoldView")) {
             if (gDefBannerIdx == -2) gDefBannerIdx = WDIndexOfClassName("MainFrameSectionFoldView");
             if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) WDDecorate(v, gDefBannerIdx);
-        } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "WCSearchBar") || strstr(nm, "MMUISearchBar"))) {
+        } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "WCSearchBar") ||
+                          strstr(nm, "MMUISearchBar") || strstr(nm, "SearchPanel") ||
+                          strstr(nm, "FavSearchBar"))) {
             WDStyleSearch(v, gHomeI, gHomeR, gContinuous, 0);
-        } else if (nm && (strstr(nm, "SectionHeader") || strstr(nm, "MMTableSection"))) {
+        } else if (nm && (strstr(nm, "SectionHeader") || strstr(nm, "MMTableSection") ||
+                          strstr(nm, "countLabel") || strstr(nm, "CountLabel"))) {
             WDStyleClearHeader(v);
         }
     }
@@ -964,7 +973,13 @@ static void WDInstallTableDisplay(void) {
         "WCTableViewManager",
         "MMTableViewInfo",
         "BrandContactsViewController",
+        "BrandServiceContactsViewController",
+        "BrandAndServiceContactsViewController",
+        "ChatRoomListViewController",
+        "MemberListViewController",
         "ContactsGenericViewController",
+        "WeixinOpenServiceViewController",
+        "WCPayMainViewControllerV2",
         NULL
     };
     for (int i = 0; kVCs[i]; i++) {
@@ -1071,6 +1086,32 @@ static void WDInstallOnce(void) {
     }
 }
 
+static UIViewController *WDOwnerVC(UIView *v) {
+    UIResponder *rr = v;
+    int d = 0;
+    while (rr && d < 12) {
+        if ([rr isKindOfClass:[UIViewController class]]) return (UIViewController *)rr;
+        rr = rr.nextResponder;
+        d++;
+    }
+    return nil;
+}
+
+static void WDClearCountOnOwner(UIViewController *own) {
+    if (!own) return;
+    @try {
+        id lab = [own valueForKey:@"m_countLabel"];
+        if ([lab isKindOfClass:[UIView class]]) WDStyleClearHeader((UIView *)lab);
+    } @catch (NSException *e) {}
+    if (!own.isViewLoaded || !own.view) return;
+    for (UIView *sv in own.view.subviews) {
+        const char *sn = class_getName(object_getClass(sv));
+        if (sn && (strstr(sn, "Count") || strstr(sn, "countLabel") || strstr(sn, "countLab"))) {
+            @try { WDStyleClearHeader(sv); } @catch (NSException *ex) {}
+        }
+    }
+}
+
 static void WDDecorateVisible(void) {
     UIApplication *app = [UIApplication sharedApplication];
     if (!app) return;
@@ -1084,6 +1125,8 @@ static void WDDecorateVisible(void) {
             n++;
             if ([v isKindOfClass:[UITableView class]]) {
                 UITableView *tv = (UITableView *)v;
+                tv.separatorColor = [UIColor clearColor];
+                tv.separatorStyle = UITableViewCellSeparatorStyleNone;
                 for (UITableViewCell *c in tv.visibleCells) {
                     @try { WDDecorateCellIfNeeded(c); } @catch (NSException *e) {}
                 }
@@ -1101,31 +1144,24 @@ static void WDDecorateVisible(void) {
                     if (f) @try { WDStyleClearHeader(f); } @catch (NSException *e) {}
                 }
                 if (tv.tableFooterView) @try { WDStyleClearHeader(tv.tableFooterView); } @catch (NSException *e) {}
-                UIViewController *own = nil;
-                UIResponder *rr = tv.nextResponder;
-                while (rr) {
-                    if ([rr isKindOfClass:[UIViewController class]]) { own = (UIViewController *)rr; break; }
-                    rr = rr.nextResponder;
-                }
-                if (own) {
-                    @try {
-                        id lab = [own valueForKey:@"m_countLabel"];
-                        if ([lab isKindOfClass:[UIView class]]) WDStyleClearHeader((UIView *)lab);
-                    } @catch (NSException *e) {}
-                    if (own.view) {
-                        for (UIView *sv in own.view.subviews) {
-                            const char *sn = class_getName(object_getClass(sv));
-                            if (sn && (strstr(sn, "Count") || strstr(sn, "countLabel"))) {
-                                @try { WDStyleClearHeader(sv); } @catch (NSException *ex) {}
-                            }
-                        }
+                if (tv.tableHeaderView) {
+                    const char *hn = class_getName(object_getClass(tv.tableHeaderView));
+                    if (hn && (strstr(hn, "SearchBar") || strstr(hn, "SearchPanel"))) {
+                        @try { WDStyleSearch(tv.tableHeaderView, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
                     }
+                }
+                WDClearCountOnOwner(WDOwnerVC(tv));
+            } else if ([v isKindOfClass:[UICollectionView class]]) {
+                UIViewController *own = WDOwnerVC(v);
+                const char *on = own ? class_getName([own class]) : NULL;
+                if (on && strstr(on, "WCPayMainViewController")) {
+                    @try { WDStyleHostCard(v, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
                 }
             } else {
                 const char *nm = class_getName(object_getClass(v));
                 if (nm && strstr(nm, "FoldView")) {
                     @try { WDDecorateViewTree(v, 0); } @catch (NSException *e) {}
-                } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "WCSearchBar"))) {
+                } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "SearchPanel") || strstr(nm, "FavSearchBar"))) {
                     @try { WDStyleSearch(v, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
                 }
             }
