@@ -10,11 +10,11 @@ static const WDItem kItems[] = {
     {"MainFrameSectionFoldView",          NULL,             "置顶横幅",   WDPageHome,     WDGroupBanner, WDKindBanner, 14, 12, 1},
     {"MFWebMMBtn",                        NULL,             "网页登录钮", WDPageHome,     WDGroupBanner, WDKindBanner, 14,  0, 1},
     {"MultiDeviceCardView",               NULL,             "多设备卡",   WDPageHome,     WDGroupBanner, WDKindBanner, 14, 12, 1},
-    {"WCSearchBar",                       NULL,             "首页搜索",   WDPageHome,     WDGroupSearch, WDKindView,   14,  0, 1},
+    {"WCSearchBar",                       NULL,             "首页搜索",   WDPageHome,     WDGroupSearch, WDKindView,   14, 12, 1},
 
     // ===== 通讯录 =====
     {"NewContactsItemCell",               NULL,             "联系人行",   WDPageContacts, WDGroupList,   WDKindCell,   14, 12, 1},
-    {"NewContactsSearchPanelView",        NULL,             "联系人搜索", WDPageContacts, WDGroupSearch, WDKindView,   14,  0, 1},
+    {"NewContactsSearchPanelView",        NULL,             "联系人搜索", WDPageContacts, WDGroupSearch, WDKindView,   14, 12, 1},
     {"BrandProfileItemBaseCell",          NULL,             "公众号行",   WDPageContacts, WDGroupList,   WDKindCell,   14, 12, 1},
 
     // ===== 发现·朋友圈·视频号 =====
@@ -61,9 +61,9 @@ static const WDItem kItems[] = {
     {"FavRecordReferView",                NULL,             "收藏引用",   WDPageChat,     WDGroupSheet,  WDKindView,   12, 10, 1},
 
     // ===== 搜索 =====
-    {"MMUISearchBar",                     NULL,             "微信搜索",   WDPageSearch,   WDGroupSearch, WDKindView,   14,  0, 1},
-    {"FavSearchBar",                      NULL,             "收藏搜索",   WDPageSearch,   WDGroupSearch, WDKindView,   14,  0, 1},
-    {"WAMainFrameTaskBarSearchBar",       NULL,             "小程序搜索", WDPageSearch,   WDGroupSearch, WDKindView,   14,  0, 1},
+    {"MMUISearchBar",                     NULL,             "微信搜索",   WDPageSearch,   WDGroupSearch, WDKindView,   14, 12, 1},
+    {"FavSearchBar",                      NULL,             "收藏搜索",   WDPageSearch,   WDGroupSearch, WDKindView,   14, 12, 1},
+    {"WAMainFrameTaskBarSearchBar",       NULL,             "小程序搜索", WDPageSearch,   WDGroupSearch, WDKindView,   14, 12, 1},
 
     // ===== 钱包·支付 =====
     {"WCPayWalletEntryHeaderView",        NULL,             "钱包头",     WDPagePay,      WDGroupPay,    WDKindView,   16, 12, 1},

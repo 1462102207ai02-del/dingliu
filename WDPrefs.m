@@ -163,10 +163,6 @@ NSString *WDHexForColor(UIColor *c) {
 - (CGFloat)insetForClass:(NSString *)name def:(CGFloat)def {
     id v = [_ud objectForKey:WDInsKey(name)];
     if (v) return [v doubleValue];
-    if (def == 0 && ![self hasCustomInset:name]) {
-        const WDItem *it = WDCatalogFind(name);
-        if (it && it->defInset == 0) return 0;
-    }
     if (def > 0) return def;
     return self.globalInset;
 }

@@ -1,5 +1,5 @@
 // WechatDuo — 微信全页面卡片化
-// v1.1.6：卡片内/外背景色；头像与时间 transform 内边距；搜索只圆内层；加号不卡片化；标签页不打孔。
+// v1.1.7：行内容随卡片缩进；搜索栏跟全局缩进；首页顶栏一体不重复；隐藏箭头；通讯录五大类一张卡。
 //
 // 视觉：连续圆角 + 分区级卡片（双侧缩进，只有首尾四角）。
 // 热路径约束：不设 layer.mask、不写 content frame、不分配 NSString。
@@ -13,7 +13,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-#define WD_VERSION_C    "1.1.6"
+#define WD_VERSION_C    "1.1.7"
 #define WD_VERSION      @WD_VERSION_C
 #define WD_DISPLAY_NAME @"WechatDuo"
 #define WD_SETTINGS_CLS @"WDSettingsController"

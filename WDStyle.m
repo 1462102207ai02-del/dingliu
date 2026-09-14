@@ -337,36 +337,81 @@ static NSInteger WDCachedRows(UITableView *tv, NSInteger section) {
     return rows;
 }
 
-static NSInteger WDCachedFirstLetter(UITableView *tv, id del) {
-    if (!tv || !del) return 0;
+static id WDContactsOwner(UITableView *tv, id del) {
+    if (del && [del respondsToSelector:@selector(ConvertToNormalContactSection:)]) return del;
+    UIResponder *r = del && [del isKindOfClass:[UIResponder class]] ? (UIResponder *)del : (UIResponder *)tv;
+    int d = 0;
+    while (r && d < 8) {
+        const char *n = class_getName(object_getClass(r));
+        if (n && strstr(n, "ContactsViewController") && !strstr(n, "Brand") && !strstr(n, "Tag")) return r;
+        r = r.nextResponder;
+        d++;
+    }
+    return nil;
+}
+
+static BOOL WDIsMeTable(UITableView *tv) {
+    if (!tv) return NO;
+    UIResponder *r = tv;
+    int d = 0;
+    while (r && d < 10) {
+        const char *n = class_getName(object_getClass(r));
+        if (n && (strstr(n, "MoreViewController") || strstr(n, "NewSettingViewController"))) return YES;
+        r = r.nextResponder;
+        d++;
+    }
+    return NO;
+}
+
+static NSInteger WDContactsCategoryEnd(UITableView *tv, id del) {
+    if (!tv) return 0;
+    id own = WDContactsOwner(tv, del);
+    if (!own) return 0;
+    del = own;
     NSNumber *hit = objc_getAssociatedObject(tv, kWDCatCacheKey);
     if (hit) return hit.integerValue;
-    NSInteger firstLetter = 0;
+    NSInteger letter = 0;
     @try {
-        firstLetter = ((NSInteger (*)(id, SEL, NSInteger))objc_msgSend)(del, @selector(ConvertToNormalContactSection:), 0);
-    } @catch (NSException *e) { firstLetter = 0; }
-    objc_setAssociatedObject(tv, kWDCatCacheKey, @(firstLetter), WD_ASSOC);
-    return firstLetter;
+        if ([del respondsToSelector:@selector(ConvertToNormalContactSection:)]) {
+            letter = ((NSInteger (*)(id, SEL, NSInteger))objc_msgSend)(del, @selector(ConvertToNormalContactSection:), 0);
+        }
+    } @catch (NSException *e) { letter = 0; }
+    NSInteger end = letter;
+    if (end <= 1) {
+        NSInteger n = 0;
+        @try { n = [tv numberOfSections]; } @catch (NSException *e) { n = 0; }
+        if (n > 12) n = 12;
+        for (NSInteger i = 0; i < n; i++) {
+            NSString *title = nil;
+            @try {
+                if ([del respondsToSelector:@selector(tableView:titleForHeaderInSection:)]) {
+                    title = ((id (*)(id, SEL, id, NSInteger))objc_msgSend)(del, @selector(tableView:titleForHeaderInSection:), tv, i);
+                }
+            } @catch (NSException *e) { title = nil; }
+            if ([title isKindOfClass:[NSString class]] && title.length == 1) { end = i; break; }
+        }
+    }
+    objc_setAssociatedObject(tv, kWDCatCacheKey, @(end), WD_ASSOC);
+    return end;
 }
 
 static NSUInteger WDSectionCornersAt(UITableView *tv, NSIndexPath *ip) {
     if (!tv || !ip) return 15;
     // 标签页 layout 里查 dataSource 会重入卡死，整页跳过打孔。
     if (WDTableIsTagList(tv)) return 15;
-    // 通讯录顶部五大类（新的朋友/群聊/标签/公众号/企业微信）可能拆成多个 section，合成一整片。
+    // 通讯录顶部五大类（新的朋友/群聊/标签/公众号/服务号）合成一整片，避免公众号/服务号各自成胶囊。
     id del = tv.delegate;
-    if (del && [del respondsToSelector:@selector(ConvertToNormalContactSection:)]) {
-        NSInteger firstLetter = WDCachedFirstLetter(tv, del);
-        if (firstLetter > 1 && ip.section >= 0 && ip.section < firstLetter) {
-            NSInteger lastSec = firstLetter - 1;
-            NSInteger lastRows = WDCachedRows(tv, lastSec);
-            BOOL first = (ip.section == 0 && ip.row == 0);
-            BOOL last = (ip.section == lastSec && ip.row == lastRows - 1);
-            if (first && last) return 15;
-            if (first) return (kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
-            if (last) return (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner);
-            return 0;
-        }
+    NSInteger catEnd = 0;
+    if (del) catEnd = WDContactsCategoryEnd(tv, del);
+    if (catEnd > 1 && ip.section >= 0 && ip.section < catEnd) {
+        NSInteger lastSec = catEnd - 1;
+        NSInteger lastRows = WDCachedRows(tv, lastSec);
+        BOOL first = (ip.section == 0 && ip.row == 0);
+        BOOL last = (ip.section == lastSec && ip.row == lastRows - 1);
+        if (first && last) return 15;
+        if (first) return (kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
+        if (last) return (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner);
+        return 0;
     }
     NSInteger rows = WDCachedRows(tv, ip.section);
     if (rows <= 1) return 15;
@@ -450,17 +495,57 @@ static void WDClearNudge(UIView *v) {
     objc_setAssociatedObject(v, kWDOrigTFKey, nil, WD_ASSOC);
 }
 
+static void WDHideArrows(UIView *v, int depth) {
+    if (!v || depth > 4) return;
+    const char *nm = class_getName(object_getClass(v));
+    BOOL named = nm && (strstr(nm, "Arrow") || strstr(nm, "arrow") ||
+                        strstr(nm, "Disclosure") || strstr(nm, "Chevron") ||
+                        strstr(nm, "chevron"));
+    if (named) {
+        v.hidden = YES;
+        v.alpha = 0;
+        return;
+    }
+    @try {
+        id arrow = [v valueForKey:@"arrowImageView"];
+        if ([arrow isKindOfClass:[UIView class]]) {
+            ((UIView *)arrow).hidden = YES;
+            ((UIView *)arrow).alpha = 0;
+        }
+    } @catch (NSException *e) {}
+    @try { [v setValue:@NO forKey:@"bShowRightArrow"]; } @catch (NSException *e) {}
+    for (UIView *s in v.subviews) WDHideArrows(s, depth + 1);
+}
+
+static void WDNudgeRowContent(UIView *item, CGFloat pad) {
+    if (!item || pad < 1) return;
+    CGFloat w = item.bounds.size.width;
+    if (w < 40) return;
+    for (UIView *s in item.subviews) {
+        if (s.hidden || s.alpha < 0.02) continue;
+        if ([s isKindOfClass:[WDCardPlate class]]) continue;
+        if (s.bounds.size.width > w - 12) continue;
+        const char *nm = class_getName(object_getClass(s));
+        if (nm && (strstr(nm, "Arrow") || strstr(nm, "arrow") || strstr(nm, "Disclosure") || strstr(nm, "Plate"))) continue;
+        CGFloat mid = CGRectGetMidX(s.frame);
+        if (mid < w * 0.48) WDNudgeInner(s, pad);
+        else if (mid > w * 0.52) WDNudgeInner(s, -pad);
+    }
+}
+
 static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
     if (!cell || inset < 4) return;
-    CGFloat pad = MIN(6.0, inset * 0.35);
+    CGFloat pad = inset;
     UIView *cv = cell.contentView ?: cell;
     for (UIView *sub in cv.subviews) {
         const char *nm = class_getName(object_getClass(sub));
         if (!nm) continue;
         if (!(strstr(nm, "MainFrameItemView") || strstr(nm, "ContactsItemView") || strstr(nm, "FakeMainFrame"))) continue;
+        WDNudgeRowContent(sub, pad);
         @try {
             id head = [sub valueForKey:@"m_frameHeadView"];
             if (![head isKindOfClass:[UIView class]]) head = [sub valueForKey:@"m_headImageView"];
+            if (![head isKindOfClass:[UIView class]]) head = [sub valueForKey:@"m_headImage"];
             if ([head isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)head, pad);
         } @catch (NSException *e) {}
         @try {
@@ -469,6 +554,8 @@ static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
         } @catch (NSException *e) {}
         return;
     }
+    // 通用行：没有 ItemView 时，对 contentView 左右子视图同样内收
+    WDNudgeRowContent(cv, pad);
 }
 
 static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL showSep, BOOL punch, BOOL asCellBg) {
@@ -596,7 +683,20 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     CGRect bounds = view.bounds;
     if (bounds.size.width < 24 || bounds.size.height < 8) return;
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
-    (void)inset;
+    CGFloat inx = MAX(0, inset);
+    if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
+    if (inx > 0.5) {
+        view.layoutMargins = UIEdgeInsetsMake(0, inx, 0, inx);
+        @try {
+            id stack = [view valueForKey:@"rootStackView"];
+            if ([stack isKindOfClass:[UIStackView class]]) {
+                UIStackView *sv = (UIStackView *)stack;
+                sv.layoutMarginsRelativeArrangement = YES;
+                sv.layoutMargins = UIEdgeInsetsMake(0, inx, 0, inx);
+            }
+        } @catch (NSException *e) {}
+        // 不写 spacer.frame / 不加宽度约束，避免和微信自己的 stack 抢布局。
+    }
     UIView *box = WDSearchInnerBox(view);
     if (box && box != view) {
         WDStyleRound(box, radius, continuous, tag);
@@ -656,6 +756,14 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
         if ([sv isKindOfClass:[UITableView class]]) tv = (UITableView *)sv;
     }
     if (tv && WDTableIsTagList(tv)) return;
+    if (tv && WDIsMeTable(tv)) {
+        // 「我」页原生 InsetGrouped，再打孔会在首卡上方多出一条灰。
+        WDHideArrows(cell, 0);
+        if (cell.accessoryType == UITableViewCellAccessoryDisclosureIndicator) {
+            cell.accessoryType = UITableViewCellAccessoryNone;
+        }
+        return;
+    }
     NSUInteger corners = ip ? WDSectionCornersAt(tv, ip) : WDSectionCorners(cell);
     if (bounds.size.width < 24) return;
 
@@ -683,6 +791,14 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
     WDHideNativeSeparators(cell);
     WDClearFillViews(cell, 0);
     WDClearFillViews(cell.contentView, 0);
+    WDHideArrows(cell, 0);
+    if (cell.accessoryType == UITableViewCellAccessoryDisclosureIndicator) {
+        cell.accessoryType = UITableViewCellAccessoryNone;
+    }
+    if (cell.accessoryView) {
+        cell.accessoryView.hidden = YES;
+        cell.accessoryView.alpha = 0;
+    }
     WDBalanceInner(cell, inx);
     (void)continuous;
 }

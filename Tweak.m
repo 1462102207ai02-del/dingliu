@@ -452,8 +452,28 @@ static BOOL WDIsOurController(UIViewController *vc) {
     return n && strncmp(n, "WD", 2) == 0;
 }
 
+static BOOL WDIsHomeController(UIViewController *vc) {
+    if (!vc) return NO;
+    const char *n = class_getName([vc class]);
+    return n && strstr(n, "NewMainFrame") != NULL;
+}
+
+static BOOL WDIsMeController(UIViewController *vc) {
+    if (!vc) return NO;
+    const char *n = class_getName([vc class]);
+    return n && (strstr(n, "MoreViewController") || strstr(n, "NewSettingViewController"));
+}
+
 static void WDPaintNavChrome(UIViewController *vc, UIColor *want) {
     if (!vc) return;
+    // 首页顶栏/搜索/+ 号是一体：不要单独给 fakeNavBar / TopHeader 上色，上滑时会多出一条。
+    if (WDIsHomeController(vc)) {
+        UINavigationController *nav = vc.navigationController;
+        if (nav && nav.navigationBar) WDPaintView(nav.navigationBar, want);
+        return;
+    }
+    // 「我」页顶部灰条来自 table 分组底 + 导航栏被刷成 grouped。这里只刷页面底，不刷导航栏。
+    if (WDIsMeController(vc)) return;
     UINavigationController *nav = vc.navigationController;
     if (nav) {
         UINavigationBar *bar = nav.navigationBar;
@@ -468,26 +488,6 @@ static void WDPaintNavChrome(UIViewController *vc, UIColor *want) {
             }
         }
     }
-    UIView *v = vc.view;
-    if (!v) return;
-    for (UIView *s in v.subviews) {
-        const char *nm = class_getName(object_getClass(s));
-        if (!nm) continue;
-        if (strstr(nm, "RightTopMenu") || strstr(nm, "BarItemCustom") ||
-            strstr(nm, "MMBarButton") || strstr(nm, "MFTitleView")) continue;
-        if (strstr(nm, "SearchBar") || strstr(nm, "WCSearch") ||
-            strstr(nm, "TopHeader") || strstr(nm, "NavBar")) {
-            WDPaintView(s, want);
-            for (UIView *c in s.subviews) {
-                const char *cn = class_getName(object_getClass(c));
-                if (!cn) continue;
-                if (strstr(cn, "RightTop") || strstr(cn, "BarButton") || strstr(cn, "AddButton")) continue;
-                if (strstr(cn, "Container") || strstr(cn, "Background") || strstr(cn, "Spacer")) {
-                    WDPaintView(c, want);
-                }
-            }
-        }
-    }
 }
 
 static void WDPaintTree(UIViewController *vc, UIColor *want) {
@@ -496,14 +496,22 @@ static void WDPaintTree(UIViewController *vc, UIColor *want) {
         WDPaintView(vc.view, nil);
         return;
     }
+    if (WDIsMeController(vc)) {
+        // 「我」页原生就是 InsetGrouped，刷 grouped 灰会在第一张卡上方多出一条。
+        WDPaintNavChrome(vc, want);
+        return;
+    }
     WDPaintView(vc.view, want);
     WDPaintNavChrome(vc, want);
+    if (WDIsHomeController(vc)) return;
     for (UIView *s in vc.view.subviews) {
         if ([s isKindOfClass:[UIScrollView class]]) WDPaintView(s, want);
         const char *nm = class_getName(object_getClass(s));
         if (nm && (strstr(nm, "RightTopMenu") || strstr(nm, "BarItemCustom") ||
-                   strstr(nm, "MMBarButton") || strstr(nm, "MFTitleView"))) continue;
-        if (nm && (strstr(nm, "SearchBar") || strstr(nm, "TopHeader") || strstr(nm, "CustomBar"))) {
+                   strstr(nm, "MMBarButton") || strstr(nm, "MFTitleView") ||
+                   strstr(nm, "CustomBar") || strstr(nm, "TopHeader") ||
+                   strstr(nm, "fakeNav"))) continue;
+        if (nm && strstr(nm, "SearchBar")) {
             WDPaintView(s, want);
         }
     }
@@ -874,6 +882,77 @@ static BOOL WDHookViewForHeader(const char *clsName) {
     return YES;
 }
 
+static BOOL WDHookHeaderHeight(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(tableView:heightForHeaderInSection:);
+    Method m = class_getInstanceMethod(cls, s);
+    static Class hooked[8];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^CGFloat(id slf, UITableView *tv, NSInteger section) {
+        CGFloat h = orig ? ((CGFloat (*)(id, SEL, id, NSInteger))orig)(slf, s, tv, section) : 32.0;
+        if (!gLive || !gMaster || gSafe) return h;
+        const char *nm = class_getName(object_getClass(slf));
+        if (nm && strstr(nm, "ContactsViewController") && !strstr(nm, "Brand") && !strstr(nm, "Tag")) {
+            NSInteger letter = 0;
+            @try {
+                if ([slf respondsToSelector:@selector(ConvertToNormalContactSection:)]) {
+                    letter = ((NSInteger (*)(id, SEL, NSInteger))objc_msgSend)(slf, @selector(ConvertToNormalContactSection:), 0);
+                }
+            } @catch (NSException *e) { letter = 0; }
+            if (letter > 1 && section > 0 && section < letter) return CGFLOAT_MIN;
+            if (!orig && letter > 1 && section < letter) return CGFLOAT_MIN;
+        }
+        return h;
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "d@:@q";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 8) hooked[hookedN++] = cls;
+    return ok;
+}
+
+static BOOL WDHookFooterHeight(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(tableView:heightForFooterInSection:);
+    Method m = class_getInstanceMethod(cls, s);
+    static Class hooked[8];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^CGFloat(id slf, UITableView *tv, NSInteger section) {
+        CGFloat h = orig ? ((CGFloat (*)(id, SEL, id, NSInteger))orig)(slf, s, tv, section) : CGFLOAT_MIN;
+        if (!gLive || !gMaster || gSafe) return h;
+        const char *nm = class_getName(object_getClass(slf));
+        if (nm && strstr(nm, "ContactsViewController") && !strstr(nm, "Brand") && !strstr(nm, "Tag")) {
+            NSInteger letter = 0;
+            @try {
+                if ([slf respondsToSelector:@selector(ConvertToNormalContactSection:)]) {
+                    letter = ((NSInteger (*)(id, SEL, NSInteger))objc_msgSend)(slf, @selector(ConvertToNormalContactSection:), 0);
+                }
+            } @catch (NSException *e) { letter = 0; }
+            if (letter > 1 && section >= 0 && section < letter) return CGFLOAT_MIN;
+        }
+        return h;
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "d@:@q";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 8) hooked[hookedN++] = cls;
+    return ok;
+}
+
 static void WDInstallTableDisplay(void) {
     static const char *kVCs[] = {
         "NewMainFrameViewController",
@@ -897,6 +976,9 @@ static void WDInstallTableDisplay(void) {
     WDHookViewForHeader("MGSessionBoxViewController");
     WDHookViewForHeader("WCTableViewManager");
     WDHookViewForHeader("MMTableViewInfo");
+    WDHookViewForHeader("ContactsViewController");
+    WDHookHeaderHeight("ContactsViewController");
+    WDHookFooterHeight("ContactsViewController");
     WDHookFoldUpdate();
 }
 
@@ -1017,6 +1099,27 @@ static void WDDecorateVisible(void) {
                     }
                     UIView *f = [tv footerViewForSection:i];
                     if (f) @try { WDStyleClearHeader(f); } @catch (NSException *e) {}
+                }
+                if (tv.tableFooterView) @try { WDStyleClearHeader(tv.tableFooterView); } @catch (NSException *e) {}
+                UIViewController *own = nil;
+                UIResponder *rr = tv.nextResponder;
+                while (rr) {
+                    if ([rr isKindOfClass:[UIViewController class]]) { own = (UIViewController *)rr; break; }
+                    rr = rr.nextResponder;
+                }
+                if (own) {
+                    @try {
+                        id lab = [own valueForKey:@"m_countLabel"];
+                        if ([lab isKindOfClass:[UIView class]]) WDStyleClearHeader((UIView *)lab);
+                    } @catch (NSException *e) {}
+                    if (own.view) {
+                        for (UIView *sv in own.view.subviews) {
+                            const char *sn = class_getName(object_getClass(sv));
+                            if (sn && (strstr(sn, "Count") || strstr(sn, "countLabel"))) {
+                                @try { WDStyleClearHeader(sv); } @catch (NSException *ex) {}
+                            }
+                        }
+                    }
                 }
             } else {
                 const char *nm = class_getName(object_getClass(v));
