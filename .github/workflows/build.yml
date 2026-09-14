@@ -111,11 +111,18 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.11
-          name: WechatDuo v1.1.11
+          tag_name: v1.1.12
+          name: WechatDuo v1.1.12
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.12**
+              - 置顶横幅展开/收起整体透明，清掉残留边角底色，仍可点击
+              - 多设备卡只做缩进，颜色改回原生
+              - 通讯录及其他页搜索栏去掉第二层，与首页搜索栏一致
+              - 圆角卡片内左右内容离边缘更远
+              - 「我」页顶部资料卡走 frontView / tableHeader / 状态卡真实宿主打孔
+              - 点击高亮铺满对应卡片栏（含「我」页钱包行）
             - **v1.1.11**
               - 通讯录「标签」行复用时清掉 transform，不再偶发错位
               - 首页会话通过 m_itemView 把头像/昵称/消息时间跟卡片缩进

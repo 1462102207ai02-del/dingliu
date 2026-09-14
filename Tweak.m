@@ -823,9 +823,15 @@ static void WDDecorateViewTree(UIView *v, int depth) {
         } else if (nm && strstr(nm, "TextStateProfileCard")) {
             int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
             if (pidx >= 0 && gSnap[pidx].on) WDStyleProfile(v, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
+        } else if (nm && strstr(nm, "SearchPanel")) {
+            for (UIView *sv in v.subviews) {
+                const char *sn = class_getName(object_getClass(sv));
+                if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar"))) {
+                    WDStyleSearch(sv, gHomeI, gHomeR, gContinuous, 0);
+                }
+            }
         } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "WCSearchBar") ||
-                          strstr(nm, "MMUISearchBar") || strstr(nm, "SearchPanel") ||
-                          strstr(nm, "FavSearchBar"))) {
+                          strstr(nm, "MMUISearchBar") || strstr(nm, "FavSearchBar"))) {
             WDStyleSearch(v, gHomeI, gHomeR, gContinuous, 0);
         } else if (nm && (strstr(nm, "SectionHeader") || strstr(nm, "MMTableSection") ||
                           strstr(nm, "countLabel") || strstr(nm, "CountLabel"))) {
@@ -905,6 +911,8 @@ static void WDClearCountOnOwner(UIViewController *own);
 static BOOL WDHookFoldState(void);
 static BOOL WDHookTabSelect(void);
 static BOOL WDHookTabAppear(const char *clsName);
+static BOOL WDHookProfileLayout(const char *clsName);
+static BOOL WDHookMeLayout(const char *clsName);
 
 static BOOL WDHookViewForHeader(const char *clsName) {
     Class cls = objc_getClass(clsName);
@@ -1020,7 +1028,18 @@ static BOOL WDHookSearchSel(Class cls, SEL s) {
         if (![NSThread isMainThread]) return;
         if (![slf isKindOfClass:[UIView class]]) return;
         if (WDIsOurView((UIView *)slf) || WDStyleShouldSkip((UIView *)slf) || WDIsChatView((UIView *)slf)) return;
-        @try { WDStyleSearch((UIView *)slf, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
+        UIView *bar = (UIView *)slf;
+        const char *nm = class_getName(object_getClass(bar));
+        if (nm && strstr(nm, "SearchPanel")) {
+            for (UIView *sv in bar.subviews) {
+                const char *sn = class_getName(object_getClass(sv));
+                if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar"))) {
+                    @try { WDStyleSearch(sv, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
+                }
+            }
+        } else {
+            @try { WDStyleSearch(bar, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
+        }
     });
     if (!stub) return NO;
     method_setImplementation(m, stub);
@@ -1061,6 +1080,60 @@ static BOOL WDHookInitCountLabel(const char *clsName) {
     if (!stub) return NO;
     method_setImplementation(m, stub);
     if (hookedN < 8) hooked[hookedN++] = cls;
+    return YES;
+}
+
+static BOOL WDHookProfileLayout(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(layoutSubviews);
+    if (!WDOwns(cls, s)) return NO;
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return NO;
+    static Class hooked[4];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = method_getImplementation(m);
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        if (orig) ((void (*)(id, SEL))orig)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        if (![slf isKindOfClass:[UIView class]]) return;
+        int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+        if (pidx >= 0 && gSnap[pidx].on) {
+            @try { WDStyleProfile((UIView *)slf, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+        }
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
+    if (hookedN < 4) hooked[hookedN++] = cls;
+    return YES;
+}
+
+static BOOL WDHookMeLayout(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(viewDidLayoutSubviews);
+    if (!WDOwns(cls, s)) return NO;
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return NO;
+    static Class hooked[4];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = method_getImplementation(m);
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        if (orig) ((void (*)(id, SEL))orig)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        if (![slf isKindOfClass:[UIViewController class]]) return;
+        int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+        if (pidx >= 0 && gSnap[pidx].on) {
+            @try { WDStyleMePage((UIViewController *)slf, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+        }
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
+    if (hookedN < 4) hooked[hookedN++] = cls;
     return YES;
 }
 
@@ -1106,8 +1179,9 @@ static void WDInstallTableDisplay(void) {
     WDHookTabAppear("MoreViewController");
     WDHookSearchBarClass("WCSearchBar");
     WDHookSearchBarClass("MMUISearchBar");
-    WDHookSearchBarClass("NewContactsSearchPanelView");
     WDHookSearchBarClass("FavSearchBar");
+    WDHookProfileLayout("TextStateProfileCardContentView");
+    WDHookMeLayout("MoreViewController");
 }
 
 static BOOL WDHookFoldUpdate(void) {
@@ -1201,6 +1275,15 @@ static BOOL WDHookTabAppear(const char *clsName) {
         if (!gLive || !gMaster || gSafe) return;
         if (![NSThread isMainThread]) return;
         @try { WDPageBgApply(); } @catch (NSException *e) {}
+        if ([slf isKindOfClass:[UIViewController class]]) {
+            const char *cn = class_getName([slf class]);
+            if (cn && strstr(cn, "MoreViewController")) {
+                int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+                if (pidx >= 0 && gSnap[pidx].on) {
+                    @try { WDStyleMePage((UIViewController *)slf, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+                }
+            }
+        }
     });
     if (!stub) return NO;
     BOOL ok = NO;
@@ -1366,7 +1449,14 @@ static void WDDecorateVisible(void) {
                 if (tv.tableFooterView) @try { WDStyleClearHeader(tv.tableFooterView); } @catch (NSException *e) {}
                 if (tv.tableHeaderView) {
                     const char *hn = class_getName(object_getClass(tv.tableHeaderView));
-                    if (hn && (strstr(hn, "SearchBar") || strstr(hn, "SearchPanel"))) {
+                    if (hn && strstr(hn, "SearchPanel")) {
+                        for (UIView *sv in tv.tableHeaderView.subviews) {
+                            const char *sn = class_getName(object_getClass(sv));
+                            if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar"))) {
+                                @try { WDStyleSearch(sv, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
+                            }
+                        }
+                    } else if (hn && strstr(hn, "SearchBar")) {
                         @try { WDStyleSearch(tv.tableHeaderView, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
                     }
                 }
@@ -1381,12 +1471,24 @@ static void WDDecorateVisible(void) {
                 const char *nm = class_getName(object_getClass(v));
                 if (nm && strstr(nm, "FoldView")) {
                     @try { WDDecorateViewTree(v, 0); } @catch (NSException *e) {}
-                } else if (nm && strstr(nm, "TextStateProfileCard")) {
+                } else if (nm && (strstr(nm, "TextStateProfileCard") || strstr(nm, "MoreViewController"))) {
                     int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
                     if (pidx >= 0 && gSnap[pidx].on) {
-                        @try { WDStyleProfile(v, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+                        UIViewController *own = WDOwnerVC(v);
+                        if (own && WDIsMeController(own)) {
+                            @try { WDStyleMePage(own, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+                        } else if (strstr(nm, "TextStateProfileCard")) {
+                            @try { WDStyleProfile(v, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+                        }
                     }
-                } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "SearchPanel") || strstr(nm, "FavSearchBar"))) {
+                } else if (nm && strstr(nm, "SearchPanel")) {
+                    for (UIView *sv in v.subviews) {
+                        const char *sn = class_getName(object_getClass(sv));
+                        if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar"))) {
+                            @try { WDStyleSearch(sv, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
+                        }
+                    }
+                } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "FavSearchBar"))) {
                     @try { WDStyleSearch(v, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
                 }
             }

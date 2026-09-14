@@ -628,17 +628,17 @@ static void WDApplySelected(UITableViewCell *cell, CGFloat inset, CGFloat radius
     if (!cell) return;
     CGRect bounds = cell.bounds;
     if (bounds.size.width < 32 || bounds.size.height < 8) return;
-    CGFloat inx = MAX(0, inset);
-    CGRect hole = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(0, inx, 0, inx));
-    if (hole.size.width < 8) hole = bounds;
+    (void)inset; (void)radius; (void)corners;
+    // 高亮铺满整格，可见范围由打孔 overlay 裁成卡片栏，避免「钱包」等行只亮一小条。
     UIView *host = cell.selectedBackgroundView;
     if (!host || !objc_getAssociatedObject(host, kWDSelKey)) {
         host = [[UIView alloc] initWithFrame:bounds];
         host.backgroundColor = [UIColor clearColor];
         host.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        UIView *fill = [[UIView alloc] initWithFrame:hole];
+        UIView *fill = [[UIView alloc] initWithFrame:bounds];
         fill.tag = 0x57445342;
         fill.userInteractionEnabled = NO;
+        fill.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [host addSubview:fill];
         objc_setAssociatedObject(host, kWDSelKey, @YES, WD_ASSOC);
         cell.selectedBackgroundView = host;
@@ -647,18 +647,15 @@ static void WDApplySelected(UITableViewCell *cell, CGFloat inset, CGFloat radius
     host.backgroundColor = [UIColor clearColor];
     UIView *fill = [host viewWithTag:0x57445342];
     if (!fill) return;
-    fill.frame = hole;
+    fill.frame = host.bounds;
+    fill.layer.cornerRadius = 0;
+    fill.layer.masksToBounds = NO;
+    fill.clipsToBounds = NO;
     if (@available(iOS 13.0, *)) {
         fill.backgroundColor = [UIColor tertiarySystemFillColor];
     } else {
-        fill.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.08];
+        fill.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.12];
     }
-    CGFloat rad = MIN(radius, MIN(hole.size.width, hole.size.height) / 2.0);
-    if (corners == 0) rad = 0;
-    fill.layer.cornerRadius = rad;
-    fill.layer.maskedCorners = (CACornerMask)(corners ? corners : 0);
-    fill.layer.masksToBounds = YES;
-    fill.clipsToBounds = YES;
     if (cell.selectionStyle == UITableViewCellSelectionStyleNone) {
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     }
@@ -674,9 +671,16 @@ static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
         WDClearNudgeDeep(cell.contentView ?: cell, 0);
         return;
     }
-    CGFloat pad = inset;
-    if (pad > 16.0) pad = 16.0;
-    if (!item) return;
+    CGFloat pad = inset + 8.0;
+    if (pad < 12.0) pad = 12.0;
+    if (pad > 24.0) pad = 24.0;
+    if (!item) {
+        if (cell.imageView) WDNudgeInner(cell.imageView, pad);
+        if (cell.textLabel) WDNudgeInner(cell.textLabel, pad);
+        if (cell.detailTextLabel) WDNudgeInner(cell.detailTextLabel, pad);
+        if (cell.accessoryView) WDNudgeInner(cell.accessoryView, -pad);
+        return;
+    }
     WDNudgeKey(item, "m_frameHeadView", pad);
     WDNudgeKey(item, "m_headImageView", pad);
     WDNudgeKey(item, "m_headImage", pad);
@@ -719,8 +723,9 @@ static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat rad
             if (plate.superview != host) {
                 [host insertSubview:plate aboveSubview:cell.contentView];
             }
-        } else if (plate.superview != host) {
-            [host addSubview:plate];
+        } else {
+            if (plate.superview != host) [host addSubview:plate];
+            [host bringSubviewToFront:plate];
         }
     } else if (asCellBg && [host isKindOfClass:[UITableViewCell class]]) {
         UITableViewCell *cell = (UITableViewCell *)host;
@@ -776,25 +781,15 @@ void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
     }
     const char *selfnm = class_getName(object_getClass(view));
     BOOL multi = selfnm && strstr(selfnm, "MultiDevice");
-    view.backgroundColor = multi ? WDResolvedIn() : [UIColor clearColor];
-    view.opaque = multi;
     if (multi) {
-        @try {
-            id login = [view valueForKey:@"deviceLoginContentView"];
-            if ([login isKindOfClass:[UIView class]]) {
-                ((UIView *)login).backgroundColor = WDResolvedIn();
-                ((UIView *)login).opaque = YES;
-            }
-        } @catch (NSException *e) {}
-        @try {
-            id manage = [view valueForKey:@"deviceManageContentView"];
-            if ([manage isKindOfClass:[UIView class]]) {
-                ((UIView *)manage).backgroundColor = WDResolvedIn();
-                ((UIView *)manage).opaque = YES;
-            }
-        } @catch (NSException *e) {}
+        id orig = objc_getAssociatedObject(view, kWDOrigBgColorKey);
+        if ([orig isKindOfClass:[UIColor class]]) view.backgroundColor = (UIColor *)orig;
+        view.opaque = YES;
+    } else {
+        view.backgroundColor = [UIColor clearColor];
+        view.opaque = NO;
     }
-    // 不 clip、不改子视图 frame —— 折叠横幅要点得着。
+    // 不 clip、不改子视图 frame —— 折叠横幅要点得着。多设备卡只打孔缩进，颜色保持原生。
     WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
     (void)continuous;
 }
@@ -876,21 +871,44 @@ static void WDApplySearchStackInset(UIView *bar, CGFloat inx) {
     WDSetSearchSpacer(bar, "rightBoxSpacer", inx);
 }
 
+static BOOL WDSearchIsWrapper(UIView *view) {
+    if (!view) return YES;
+    const char *nm = class_getName(object_getClass(view));
+    if (nm && (strstr(nm, "SearchPanel") || strstr(nm, "SearchBarContainer") ||
+               strstr(nm, "ContactsSearch"))) return YES;
+    if (view.bounds.size.height > 72) return YES;
+    return NO;
+}
+
+static void WDStyleSearchInnerOnly(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag, int depth) {
+    if (!view || depth > 5) return;
+    const char *nm = class_getName(object_getClass(view));
+    BOOL bar = nm && (strstr(nm, "WCSearchBar") || strstr(nm, "MMUISearchBar") ||
+                      strstr(nm, "FavSearchBar") || strstr(nm, "WAMainFrameTaskBarSearchBar"));
+    if (bar && view.bounds.size.height <= 72) {
+        WDStyleSearch(view, inset, radius, continuous, tag);
+        return;
+    }
+    for (UIView *s in view.subviews) WDStyleSearchInnerOnly(s, inset, radius, continuous, tag, depth + 1);
+}
+
 void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!view) return;
     if (WDStyleShouldSkip(view)) return;
     CGRect bounds = view.bounds;
     if (bounds.size.width < 24 || bounds.size.height < 8) return;
-    // 联系人搜索面板很高，只往里找真正的搜索条，禁止整块打孔。
-    if (bounds.size.height > 72) {
-        for (UIView *s in view.subviews) {
-            const char *sn = class_getName(object_getClass(s));
-            if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar") ||
-                       strstr(sn, "SearchBar") || strstr(sn, "searchBox"))) {
-                WDStyleSearch(s, inset, radius, continuous, tag);
-            }
+    // 通讯录等页的 SearchPanel 是包装层：只装饰内层 WCSearchBar，禁止再打一层。
+    if (WDSearchIsWrapper(view)) {
+        const char *selfnm = class_getName(object_getClass(view));
+        BOOL selfIsBar = selfnm && (strstr(selfnm, "WCSearchBar") || strstr(selfnm, "MMUISearchBar"));
+        if (!selfIsBar) {
+            WDStyleSearchInnerOnly(view, inset, radius, continuous, tag, 0);
+            return;
         }
-        return;
+        if (bounds.size.height > 72) {
+            WDStyleSearchInnerOnly(view, inset, radius, continuous, tag, 0);
+            return;
+        }
     }
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
     CGFloat inx = MAX(0, inset);
@@ -965,6 +983,34 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     else WDStyleRound(view, MIN(radius, view.bounds.size.height / 2.0), continuous, tag);
 }
 
+static void WDClearFillsDeep(UIView *v, int depth) {
+    if (!v || depth > 6) return;
+    const char *nm = class_getName(object_getClass(v));
+    if (nm && strstr(nm, "WDCardPlate")) return;
+    if (![v isKindOfClass:[UILabel class]]) {
+        v.backgroundColor = [UIColor clearColor];
+        v.opaque = NO;
+        if (v.layer) v.layer.backgroundColor = [UIColor clearColor].CGColor;
+    }
+    if ([v isKindOfClass:[UIVisualEffectView class]]) {
+        ((UIVisualEffectView *)v).effect = nil;
+        v.backgroundColor = [UIColor clearColor];
+    }
+    if ([v isKindOfClass:[UIImageView class]]) {
+        UIImageView *iv = (UIImageView *)v;
+        UIView *p = v.superview;
+        CGRect f = v.frame;
+        BOOL bleed = p && f.origin.x < 2 && f.size.width >= p.bounds.size.width - 4 &&
+                     f.size.height >= MAX(8, p.bounds.size.height - 8);
+        if (bleed) {
+            iv.image = nil;
+            iv.backgroundColor = [UIColor clearColor];
+            iv.opaque = NO;
+        }
+    }
+    for (UIView *s in v.subviews) WDClearFillsDeep(s, depth + 1);
+}
+
 void WDStyleFold(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!view) return;
     CGRect bounds = view.bounds;
@@ -976,15 +1022,12 @@ void WDStyleFold(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
     }
-    view.backgroundColor = [UIColor clearColor];
-    view.opaque = NO;
     view.clipsToBounds = NO;
+    view.layer.masksToBounds = NO;
+    WDClearFillsDeep(view, 0);
     @try {
         id btn = [view valueForKey:@"bannerBtn"];
-        if ([btn isKindOfClass:[UIView class]]) {
-            ((UIView *)btn).backgroundColor = [UIColor clearColor];
-            ((UIView *)btn).opaque = NO;
-        }
+        if ([btn isKindOfClass:[UIView class]]) WDClearFillsDeep((UIView *)btn, 0);
     } @catch (NSException *e) {}
     @try {
         id top = [view valueForKey:@"topSeparatorView"];
@@ -995,12 +1038,14 @@ void WDStyleFold(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
         if ([bot isKindOfClass:[UIView class]]) { ((UIView *)bot).hidden = YES; ((UIView *)bot).alpha = 0; }
     } @catch (NSException *e) {}
     WDHideLineViews(view, 0);
+    // 打孔只盖两侧缝，洞里必须是全透明，不能再留宿主/按钮底色的边角。
     WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
     (void)continuous;
 }
 
 void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!view) return;
+    if ([view isKindOfClass:[UITableView class]] || [view isKindOfClass:[UICollectionView class]]) return;
     CGRect bounds = view.bounds;
     if (bounds.size.width < 40 || bounds.size.height < 24) return;
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
@@ -1010,9 +1055,9 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
     }
-    view.backgroundColor = WDResolvedIn();
-    view.opaque = YES;
     view.clipsToBounds = NO;
+    view.opaque = NO;
+    view.backgroundColor = WDResolvedIn();
     @try {
         id bg = [view valueForKey:@"backgroundView"];
         if ([bg isKindOfClass:[UIView class]]) {
@@ -1024,8 +1069,73 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
         id sep = [view valueForKey:@"topSeparator"];
         if ([sep isKindOfClass:[UIView class]]) { ((UIView *)sep).hidden = YES; ((UIView *)sep).alpha = 0; }
     } @catch (NSException *e) {}
+    WDHideLineViews(view, 0);
     WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
     (void)continuous;
+}
+
+static UIView *WDMeProfileHost(UIViewController *vc) {
+    if (!vc || !vc.isViewLoaded) return nil;
+    UIView *header = nil;
+    @try {
+        id tv = [vc valueForKey:@"frontTableView"];
+        if ([tv isKindOfClass:[UITableView class]]) {
+            UIView *th = ((UITableView *)tv).tableHeaderView;
+            if (th && th.bounds.size.width >= 160 &&
+                th.bounds.size.height >= 64 && th.bounds.size.height <= 360) {
+                const char *hn = class_getName(object_getClass(th));
+                if (!(hn && (strstr(hn, "SearchBar") || strstr(hn, "SearchPanel")))) header = th;
+            }
+        }
+    } @catch (NSException *e) {}
+    if (header) return header;
+    UIView *headHost = nil;
+    @try {
+        id head = [vc valueForKey:@"headImage"];
+        if ([head isKindOfClass:[UIView class]]) {
+            UIView *p = ((UIView *)head).superview;
+            int u = 0;
+            while (p && u < 6) {
+                if (p == vc.view) break;
+                if ([p isKindOfClass:[UITableView class]] || [p isKindOfClass:[UITableViewCell class]]) break;
+                CGFloat h = p.bounds.size.height;
+                CGFloat w = p.bounds.size.width;
+                if (w >= 160 && h >= 64 && h <= 360) headHost = p;
+                p = p.superview;
+                u++;
+            }
+        }
+    } @catch (NSException *e) {}
+    if (headHost) return headHost;
+    @try {
+        id d = [vc valueForKey:@"textStateDetailView"];
+        if ([d isKindOfClass:[UIView class]]) {
+            UIView *dv = (UIView *)d;
+            if (dv.bounds.size.height >= 24 && dv.bounds.size.height <= 360) return dv;
+        }
+    } @catch (NSException *e) {}
+    return nil;
+}
+
+void WDStyleMePage(UIViewController *vc, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
+    if (!vc || !vc.isViewLoaded) return;
+    UIView *host = WDMeProfileHost(vc);
+    if (host) WDStyleProfile(host, inset, radius, continuous, tag);
+    @try {
+        id d = [vc valueForKey:@"textStateDetailView"];
+        if ([d isKindOfClass:[UIView class]] && (UIView *)d != host) {
+            UIView *dv = (UIView *)d;
+            UIView *p = dv.superview;
+            BOOL nested = NO;
+            int u = 0;
+            while (p && u < 8) {
+                if (p == host) { nested = YES; break; }
+                p = p.superview;
+                u++;
+            }
+            if (!nested) WDStyleProfile(dv, inset, radius, continuous, tag);
+        }
+    } @catch (NSException *e) {}
 }
 
 static void WDClearHeaderRecur(UIView *v, int depth) {
