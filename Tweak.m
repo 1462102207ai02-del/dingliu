@@ -235,6 +235,19 @@ static BOOL WDNameHas(const char *nm, const char *needle) {
     return nm && needle && strstr(nm, needle) != NULL;
 }
 
+static BOOL WDIsOurView(UIView *v) {
+    if (!v) return YES;
+    UIResponder *r = v;
+    int d = 0;
+    while (r && d < 10) {
+        const char *n = class_getName(object_getClass(r));
+        if (n && n[0] == 'W' && n[1] == 'D') return YES;
+        r = r.nextResponder;
+        d++;
+    }
+    return NO;
+}
+
 static BOOL WDIsChatView(UIView *v) {
     if (!v) return NO;
     const char *nm = class_getName(object_getClass(v));
@@ -244,11 +257,16 @@ static BOOL WDIsChatView(UIView *v) {
     if (WDNameHas(nm, "MsgContentViewController")) return YES;
     if (WDNameHas(nm, "MessageCellView")) return YES;
     if (WDNameHas(nm, "ChatTimeCell")) return YES;
+    if (WDNameHas(nm, "MMGrowTextView") || WDNameHas(nm, "GrowTextView")) return YES;
+    if (WDNameHas(nm, "MMInputTool") || WDNameHas(nm, "InputToolContainer") ||
+        WDNameHas(nm, "InputToolView")) return YES;
     UIView *p = v;
     int d = 0;
     while (p && d < 8) {
         const char *pn = class_getName(object_getClass(p));
-        if (pn && (strstr(pn, "BaseMsgContent") || strstr(pn, "MsgContentView"))) return YES;
+        if (pn && (strstr(pn, "BaseMsgContent") || strstr(pn, "MsgContentView") ||
+                   strstr(pn, "MMGrowTextView") || strstr(pn, "MMInputTool") ||
+                   strstr(pn, "InputToolContainer"))) return YES;
         p = p.superview;
         d++;
     }
@@ -285,10 +303,12 @@ static void WDDecorate(id self, int idx) {
     if (!gSnap[idx].on) return;
     if (![self isKindOfClass:[UIView class]]) return;
     UIView *v = (UIView *)self;
+    if (WDIsOurView(v)) return;
     if (WDStyleShouldSkip(v)) return;
     if (WDIsChatView(v)) return;
     const WDItem *it = &WDCatalogItems()[idx];
     if (it->kind == WDKindBubble || it->group == WDGroupBubble) return;
+    if (it->page == WDPageChat && it->group == WDGroupInput) return;
     if (it->group == WDGroupSearch) {
         WDStyleSearch(v, gHomeI > 0.5f ? gHomeI : gSnap[idx].i,
                       gHomeR > 0.5f ? gHomeR : gSnap[idx].r, gContinuous, idx);
@@ -603,6 +623,7 @@ static int gRevertBudget = 0;
 
 static void WDRevertRecur(UIView *v, int depth) {
     if (!v || depth > 20 || gRevertBudget <= 0) return;
+    if (WDIsOurView(v)) return;
     gRevertBudget--;
     int tag = WDStyleTagOf(v);
     if (tag >= 0 && tag < 160) {
@@ -716,6 +737,7 @@ static int gDefCellIdx = -2;
 static void WDDecorateCellIfNeeded(UITableViewCell *cell) {
     if (!gLive || !gMaster || gSafe) return;
     if (![cell isKindOfClass:[UITableViewCell class]]) return;
+    if (WDIsOurView(cell)) return;
     if (WDStyleShouldSkip(cell)) return;
     if (WDIsChatView(cell)) return;
     int idx = WDIdxForClass(object_getClass(cell));
@@ -743,7 +765,7 @@ static BOOL WDHookWillDisplay(const char *clsName) {
     IMP stub = imp_implementationWithBlock(^(id slf, UITableView *tv, UITableViewCell *cell, NSIndexPath *ip) {
         if (orig) ((void (*)(id, SEL, id, id, id))orig)(slf, s, tv, cell, ip);
         if (![NSThread isMainThread]) return;
-        if (gLive && gMaster && !gSafe && [cell isKindOfClass:[UITableViewCell class]] && !WDIsChatView(cell) && !WDStyleShouldSkip(cell)) {
+        if (gLive && gMaster && !gSafe && [cell isKindOfClass:[UITableViewCell class]] && !WDIsOurView(cell) && !WDIsChatView(cell) && !WDStyleShouldSkip(cell)) {
             int idx = WDIdxForClass(object_getClass(cell));
             if (idx < 0) {
                 if (gDefCellIdx == -2) gDefCellIdx = WDIndexOfClassName("MMTableViewCell");
@@ -774,6 +796,7 @@ static int gDefBannerIdx = -2;
 static void WDDecorateViewTree(UIView *v, int depth) {
     if (!v || depth > 4) return;
     if (![v isKindOfClass:[UIView class]]) return;
+    if (WDIsOurView(v)) return;
     int idx = WDIdxForClass(object_getClass(v));
     if (idx < 0 && [v isKindOfClass:[UITableViewCell class]]) {
         WDDecorateCellIfNeeded((UITableViewCell *)v);
@@ -1103,12 +1126,33 @@ static void WDClearCountOnOwner(UIViewController *own) {
         id lab = [own valueForKey:@"m_countLabel"];
         if ([lab isKindOfClass:[UIView class]]) WDStyleClearHeader((UIView *)lab);
     } @catch (NSException *e) {}
+    @try {
+        id lab = [own valueForKey:@"countLabel"];
+        if ([lab isKindOfClass:[UIView class]]) WDStyleClearHeader((UIView *)lab);
+    } @catch (NSException *e) {}
     if (!own.isViewLoaded || !own.view) return;
-    for (UIView *sv in own.view.subviews) {
+    NSMutableArray *q = [NSMutableArray arrayWithObject:own.view];
+    int n = 0;
+    while (q.count && n < 80) {
+        UIView *sv = q.firstObject;
+        [q removeObjectAtIndex:0];
+        n++;
         const char *sn = class_getName(object_getClass(sv));
-        if (sn && (strstr(sn, "Count") || strstr(sn, "countLabel") || strstr(sn, "countLab"))) {
-            @try { WDStyleClearHeader(sv); } @catch (NSException *ex) {}
+        BOOL named = sn && (strstr(sn, "Count") || strstr(sn, "countLabel") ||
+                            strstr(sn, "countLab") || strstr(sn, "BottomCount") ||
+                            strstr(sn, "ContactCount"));
+        if (named || [sv isKindOfClass:[UILabel class]]) {
+            NSString *txt = nil;
+            if ([sv isKindOfClass:[UILabel class]]) txt = ((UILabel *)sv).text;
+            if (named || (txt && ([txt containsString:@"个服务号"] ||
+                                  [txt containsString:@"个公众号"] ||
+                                  [txt containsString:@"个朋友"] ||
+                                  [txt containsString:@"个联系人"] ||
+                                  [txt containsString:@"个群聊"]))) {
+                @try { WDStyleClearHeader(sv); } @catch (NSException *ex) {}
+            }
         }
+        if (sv.subviews.count && n < 60) [q addObjectsFromArray:sv.subviews];
     }
 }
 
@@ -1123,6 +1167,7 @@ static void WDDecorateVisible(void) {
             UIView *v = q.firstObject;
             [q removeObjectAtIndex:0];
             n++;
+            if (WDIsOurView(v)) continue;
             if ([v isKindOfClass:[UITableView class]]) {
                 UITableView *tv = (UITableView *)v;
                 tv.separatorColor = [UIColor clearColor];
@@ -1194,6 +1239,32 @@ static void WDBoot(void) {
         WDPageBgApply();
         if (gLive && gMaster && !gSafe) {
             @try { WDDecorateVisible(); } @catch (NSException *e) {}
+        }
+        // 设置页自己的 InsetGrouped 不要被全局打孔/还原带崩，改完数值只刷新自己。
+        UIApplication *app = [UIApplication sharedApplication];
+        if (app) {
+            for (UIWindow *w in app.windows) {
+                UIViewController *top = w.rootViewController;
+                NSMutableArray *qq = [NSMutableArray array];
+                if (top) [qq addObject:top];
+                int k = 0;
+                while (qq.count && k < 20) {
+                    UIViewController *c = qq.firstObject;
+                    [qq removeObjectAtIndex:0];
+                    k++;
+                    if (WDIsOurController(c) && c.isViewLoaded) {
+                        if ([c isKindOfClass:[UITableViewController class]]) {
+                            [((UITableViewController *)c).tableView setNeedsLayout];
+                        }
+                    }
+                    if (c.presentedViewController) [qq addObject:c.presentedViewController];
+                    [qq addObjectsFromArray:c.childViewControllers];
+                    if ([c isKindOfClass:[UINavigationController class]]) {
+                        UIViewController *t = ((UINavigationController *)c).topViewController;
+                        if (t) [qq addObject:t];
+                    }
+                }
+            }
         }
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification

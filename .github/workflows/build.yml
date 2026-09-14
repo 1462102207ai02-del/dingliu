@@ -111,11 +111,18 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.8
-          name: WechatDuo v1.1.8
+          tag_name: v1.1.9
+          name: WechatDuo v1.1.9
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.9**
+              - 搜索栏：外层打孔、内层圆角，不再写 layoutMargins，占位文字不再贴到放大镜上
+              - 聊天输入框保持原生，不再单独圆角漏灰底
+              - 「2个服务号」等统计页尾横幅全透明（含包装层）
+              - 通讯录五大类「标签」行与其他行对齐，不再位移
+              - 点击高亮撑满卡片对应栏、不超出卡片；通讯录搜索栏跟卡片缩进+圆角
+              - 设置页改数值不再触发全局打孔，文字不再挤到右边
             - **v1.1.8**
               - 卡片内只做光学内边距（头像/昵称/摘要略右、时间略左），不再双重全量 inset
               - 通讯录底部统计及五大类二级页底部统计全透明

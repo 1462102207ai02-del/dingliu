@@ -49,6 +49,8 @@
     [super layoutSubviews];
     UIView *cv = self.contentView;
     CGFloat w = cv.bounds.size.width, h = cv.bounds.size.height;
+    // 全局 prefs 通知会 setNeedsLayout；宽度还没算完时不要把标题写死到右边。
+    if (w < 80 || h < 20) return;
     CGFloat right = 14;
     if (self.sw) {
         CGRect f = self.sw.frame;
