@@ -111,11 +111,15 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.10
-          name: WechatDuo v1.1.10
+          tag_name: v1.1.11
+          name: WechatDuo v1.1.11
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.11**
+              - 通讯录「标签」行复用时清掉 transform，不再偶发错位
+              - 首页会话通过 m_itemView 把头像/昵称/消息时间跟卡片缩进
+              - 搜索栏用 rootStackView.layoutMargins 缩进，圆 searchBoxContainer；挂 arrangeBaseUIElements，不写 frame/bar.margins
             - **v1.1.10**
               - 深色多设备卡跟卡片内色，不再露 grouped 灰块
               - 切页只刷当前 Tab，去掉 2 秒全刷定时器

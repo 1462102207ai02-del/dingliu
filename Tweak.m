@@ -1005,6 +1005,39 @@ static BOOL WDHookFooterHeight(const char *clsName) {
     return ok;
 }
 
+static BOOL WDHookSearchSel(Class cls, SEL s) {
+    if (!cls || !s || !WDOwns(cls, s)) return NO;
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return NO;
+    static SEL hookedSel[16];
+    static Class hookedCls[16];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hookedCls[i] == cls && hookedSel[i] == s) return YES;
+    IMP orig = method_getImplementation(m);
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        if (orig) ((void (*)(id, SEL))orig)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        if (![slf isKindOfClass:[UIView class]]) return;
+        if (WDIsOurView((UIView *)slf) || WDStyleShouldSkip((UIView *)slf) || WDIsChatView((UIView *)slf)) return;
+        @try { WDStyleSearch((UIView *)slf, gHomeI, gHomeR, gContinuous, 0); } @catch (NSException *e) {}
+    });
+    if (!stub) return NO;
+    method_setImplementation(m, stub);
+    if (hookedN < 16) { hookedCls[hookedN] = cls; hookedSel[hookedN] = s; hookedN++; }
+    return YES;
+}
+
+static BOOL WDHookSearchBarClass(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    BOOL ok = NO;
+    if (WDHookSearchSel(cls, @selector(layoutSubviews))) ok = YES;
+    if (WDHookSearchSel(cls, @selector(arrangeBaseUIElements))) ok = YES;
+    if (WDHookSearchSel(cls, @selector(setUnactiveStyle))) ok = YES;
+    return ok;
+}
+
 static BOOL WDHookInitCountLabel(const char *clsName) {
     Class cls = objc_getClass(clsName);
     if (!cls) return NO;
@@ -1071,6 +1104,10 @@ static void WDInstallTableDisplay(void) {
     WDHookTabAppear("ContactsViewController");
     WDHookTabAppear("FindFriendEntryViewController");
     WDHookTabAppear("MoreViewController");
+    WDHookSearchBarClass("WCSearchBar");
+    WDHookSearchBarClass("MMUISearchBar");
+    WDHookSearchBarClass("NewContactsSearchPanelView");
+    WDHookSearchBarClass("FavSearchBar");
 }
 
 static BOOL WDHookFoldUpdate(void) {

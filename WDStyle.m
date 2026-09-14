@@ -406,7 +406,8 @@ static NSInteger WDContactsCategoryEnd(UITableView *tv, id del) {
             if ([title isKindOfClass:[NSString class]] && title.length == 1) { end = i; break; }
         }
     }
-    objc_setAssociatedObject(tv, kWDCatCacheKey, @(end), WD_ASSOC);
+    // 数据没就绪时 end=0，不能缓存，否则五大类行会被当成普通联系人去 nudge，标签偶发错位。
+    if (end > 1) objc_setAssociatedObject(tv, kWDCatCacheKey, @(end), WD_ASSOC);
     return end;
 }
 
@@ -520,7 +521,15 @@ static void WDClearFillViews(UIView *v, int depth) {
 }
 
 static void WDNudgeInner(UIView *v, CGFloat dx) {
-    if (!v || fabs(dx) < 0.5) return;
+    if (!v) return;
+    if (fabs(dx) < 0.5) {
+        NSValue *orig = objc_getAssociatedObject(v, kWDOrigTFKey);
+        if (orig) {
+            v.transform = [orig CGAffineTransformValue];
+            objc_setAssociatedObject(v, kWDOrigTFKey, nil, WD_ASSOC);
+        }
+        return;
+    }
     NSValue *saved = objc_getAssociatedObject(v, kWDOrigTFKey);
     CGAffineTransform want = CGAffineTransformMakeTranslation(dx, 0);
     if (saved) {
@@ -537,6 +546,46 @@ static void WDClearNudge(UIView *v) {
     if (!orig) return;
     v.transform = [orig CGAffineTransformValue];
     objc_setAssociatedObject(v, kWDOrigTFKey, nil, WD_ASSOC);
+}
+
+static void WDClearNudgeDeep(UIView *v, int depth) {
+    if (!v || depth > 6) return;
+    WDClearNudge(v);
+    for (UIView *s in v.subviews) WDClearNudgeDeep(s, depth + 1);
+}
+
+static UIView *WDCellItemView(UITableViewCell *cell) {
+    if (!cell) return nil;
+    static const char *keys[] = { "m_itemView", "m_contactsItemView", "contactsItemView", NULL };
+    for (int i = 0; keys[i]; i++) {
+        @try {
+            id v = [cell valueForKey:[NSString stringWithUTF8String:keys[i]]];
+            if ([v isKindOfClass:[UIView class]] && v != cell && v != cell.contentView) return (UIView *)v;
+        } @catch (NSException *e) {}
+    }
+    NSMutableArray *q = [NSMutableArray array];
+    if (cell.contentView) [q addObject:cell.contentView];
+    [q addObject:cell];
+    int n = 0;
+    while (q.count && n < 28) {
+        UIView *cur = q.firstObject;
+        [q removeObjectAtIndex:0];
+        n++;
+        const char *nm = class_getName(object_getClass(cur));
+        if (nm && (strstr(nm, "MainFrameItemView") || strstr(nm, "ContactsItemView") || strstr(nm, "FakeMainFrame"))) {
+            if (cur != cell && cur != cell.contentView) return cur;
+        }
+        if (cur.subviews.count && n < 22) [q addObjectsFromArray:cur.subviews];
+    }
+    return nil;
+}
+
+static void WDNudgeKey(UIView *host, const char *key, CGFloat dx) {
+    if (!host || !key) return;
+    @try {
+        id v = [host valueForKey:[NSString stringWithUTF8String:key]];
+        if ([v isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)v, dx);
+    } @catch (NSException *e) {}
 }
 
 static void WDHideArrows(UIView *v, int depth) {
@@ -616,37 +665,38 @@ static void WDApplySelected(UITableViewCell *cell, CGFloat inset, CGFloat radius
 }
 
 static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
-    if (!cell || inset < 2) return;
-    // 内容跟卡片缩进走：transform 平移，禁止写 ItemView/content frame。
-    CGFloat pad = inset;
-    if (pad > 18.0) pad = 18.0;
-    if (pad < 1.0) return;
-    UIView *cv = cell.contentView ?: cell;
-    for (UIView *sub in cv.subviews) {
-        const char *nm = class_getName(object_getClass(sub));
-        if (!nm) continue;
-        if (!(strstr(nm, "MainFrameItemView") || strstr(nm, "ContactsItemView") || strstr(nm, "FakeMainFrame"))) continue;
-        @try {
-            id head = [sub valueForKey:@"m_frameHeadView"];
-            if (![head isKindOfClass:[UIView class]]) head = [sub valueForKey:@"m_headImageView"];
-            if (![head isKindOfClass:[UIView class]]) head = [sub valueForKey:@"m_headImage"];
-            if ([head isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)head, pad);
-        } @catch (NSException *e) {}
-        @try {
-            id name = [sub valueForKey:@"m_nameLabel"];
-            if (![name isKindOfClass:[UIView class]]) name = [sub valueForKey:@"m_nickNameLabel"];
-            if ([name isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)name, pad);
-        } @catch (NSException *e) {}
-        @try {
-            id msg = [sub valueForKey:@"m_messageLabel"];
-            if ([msg isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)msg, pad);
-        } @catch (NSException *e) {}
-        @try {
-            id time = [sub valueForKey:@"m_timeLabel"];
-            if ([time isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)time, -pad);
-        } @catch (NSException *e) {}
+    if (!cell) return;
+    // 内容跟卡片缩进走：只 translate，禁止写 ItemView/content frame。
+    // NewMainFrameCell 的会话内容在 m_itemView，不一定是 contentView 的直接子视图。
+    UIView *item = WDCellItemView(cell);
+    if (inset < 2) {
+        if (item) WDClearNudgeDeep(item, 0);
+        WDClearNudgeDeep(cell.contentView ?: cell, 0);
         return;
     }
+    CGFloat pad = inset;
+    if (pad > 16.0) pad = 16.0;
+    if (!item) return;
+    WDNudgeKey(item, "m_frameHeadView", pad);
+    WDNudgeKey(item, "m_headImageView", pad);
+    WDNudgeKey(item, "m_headImage", pad);
+    WDNudgeKey(item, "m_unreadCountView", pad);
+    WDNudgeKey(item, "m_nameLabel", pad);
+    WDNudgeKey(item, "m_nickNameLabel", pad);
+    WDNudgeKey(item, "m_descPostfix", pad);
+    WDNudgeKey(item, "m_namePostIconView", pad);
+    WDNudgeKey(item, "m_textStateView", pad);
+    WDNudgeKey(item, "m_messageLabel", pad);
+    WDNudgeKey(item, "m_msgPostfixLabel", pad);
+    WDNudgeKey(item, "m_labelNamePostfix", pad);
+    WDNudgeKey(item, "m_iconNamePostfix", pad);
+    WDNudgeKey(item, "m_timeLabel", -pad);
+    WDNudgeKey(item, "m_greenLabel", -pad);
+    WDNudgeKey(item, "m_statusView", -pad);
+    WDNudgeKey(item, "m_liveStatusView", -pad);
+    WDNudgeKey(item, "m_rightLabel", -pad);
+    WDNudgeKey(item, "m_rightButton", -pad);
+    WDNudgeKey(item, "arrowImageView", -pad);
 }
 
 static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL showSep, BOOL punch, BOOL asCellBg) {
@@ -792,11 +842,6 @@ static void WDSetSearchSpacer(UIView *bar, const char *key, CGFloat width) {
         id sp = [bar valueForKey:[NSString stringWithUTF8String:key]];
         if (![sp isKindOfClass:[UIView class]]) return;
         UIView *spacer = (UIView *)sp;
-        CGRect f = spacer.frame;
-        if (fabs(f.size.width - width) > 0.5) {
-            f.size.width = width;
-            spacer.frame = f;
-        }
         NSLayoutConstraint *w = nil;
         for (NSLayoutConstraint *c in spacer.constraints) {
             if (c.firstAttribute == NSLayoutAttributeWidth && c.secondItem == nil) { w = c; break; }
@@ -804,9 +849,31 @@ static void WDSetSearchSpacer(UIView *bar, const char *key, CGFloat width) {
         if (w) {
             if (fabs(w.constant - width) > 0.5) w.constant = width;
         } else {
-            [spacer.widthAnchor constraintEqualToConstant:width].active = YES;
+            NSLayoutConstraint *nw = [spacer.widthAnchor constraintEqualToConstant:width];
+            nw.priority = UILayoutPriorityRequired - 1;
+            nw.active = YES;
         }
     } @catch (NSException *e) {}
+}
+
+static void WDApplySearchStackInset(UIView *bar, CGFloat inx) {
+    if (!bar) return;
+    UIStackView *root = nil;
+    @try {
+        id r = [bar valueForKey:@"rootStackView"];
+        if ([r isKindOfClass:[UIStackView class]]) root = (UIStackView *)r;
+    } @catch (NSException *e) {}
+    if (root) {
+        root.insetsLayoutMarginsFromSafeArea = NO;
+        root.layoutMarginsRelativeArrangement = YES;
+        UIEdgeInsets cur = root.layoutMargins;
+        if (fabs(cur.left - inx) > 0.5 || fabs(cur.right - inx) > 0.5) {
+            root.layoutMargins = UIEdgeInsetsMake(cur.top, inx, cur.bottom, inx);
+        }
+        return;
+    }
+    WDSetSearchSpacer(bar, "leftBoxSpacer", inx);
+    WDSetSearchSpacer(bar, "rightBoxSpacer", inx);
 }
 
 void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
@@ -814,10 +881,22 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     if (WDStyleShouldSkip(view)) return;
     CGRect bounds = view.bounds;
     if (bounds.size.width < 24 || bounds.size.height < 8) return;
+    // 联系人搜索面板很高，只往里找真正的搜索条，禁止整块打孔。
+    if (bounds.size.height > 72) {
+        for (UIView *s in view.subviews) {
+            const char *sn = class_getName(object_getClass(s));
+            if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar") ||
+                       strstr(sn, "SearchBar") || strstr(sn, "searchBox"))) {
+                WDStyleSearch(s, inset, radius, continuous, tag);
+            }
+        }
+        return;
+    }
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
-    // 禁止写 layoutMargins（占位贴放大镜）；禁止写 searchBox.frame（Auto Layout 会还原）。
+    // 禁止写 WCSearchBar.layoutMargins（占位贴放大镜）；禁止写 searchBox.frame。
+    // 缩进只改 rootStackView 的 layoutMargins / spacer 约束。
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
@@ -825,22 +904,60 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     view.backgroundColor = [UIColor clearColor];
     view.opaque = NO;
     view.clipsToBounds = NO;
-    if (inx > 0.5) {
-        WDSetSearchSpacer(view, "leftBoxSpacer", inx);
-        WDSetSearchSpacer(view, "rightBoxSpacer", inx);
+    @try {
+        id line = [view valueForKey:@"bottomLineView"];
+        if ([line isKindOfClass:[UIView class]]) {
+            ((UIView *)line).hidden = YES;
+            ((UIView *)line).alpha = 0;
+        }
+    } @catch (NSException *e) {}
+    if (inx > 0.5) WDApplySearchStackInset(view, inx);
+
+    UIView *capsule = nil;
+    @try {
+        id c = [view valueForKey:@"searchBoxContainer"];
+        if ([c isKindOfClass:[UIView class]]) capsule = (UIView *)c;
+    } @catch (NSException *e) {}
+    if (!capsule) {
+        @try {
+            id box = [view valueForKey:@"searchBox"];
+            if ([box isKindOfClass:[UIView class]]) capsule = (UIView *)box;
+        } @catch (NSException *e) {}
     }
-    UIView *box = WDSearchInnerBox(view);
-    if (box && box != view) {
-        CGFloat br = MIN(radius, box.bounds.size.height > 1 ? box.bounds.size.height / 2.0 : radius);
-        WDStyleRound(box, br, continuous, tag);
+    if (!capsule) capsule = WDSearchInnerBox(view);
+    if (capsule && capsule != view) {
+        CGFloat br = MIN(radius, capsule.bounds.size.height > 1 ? capsule.bounds.size.height / 2.0 : radius);
+        WDStyleRound(capsule, br, continuous, tag);
         if (gColMaster && gInOn) {
             UIColor *inC = WDResolvedIn();
-            if (inC) box.backgroundColor = inC;
+            if (inC) capsule.backgroundColor = inC;
         }
-        // 有内层胶囊时不对外层打孔，否则会盖住放大镜。缩进靠 spacer。
+        if (gColMaster && gInOn) {
+            @try { [view setValue:WDResolvedIn() forKey:@"searchBoxContainerColor"]; } @catch (NSException *e) {}
+        }
         return;
     }
+    // 包装层（tableHeaderView / SearchPanel）里再找 WCSearchBar。
+    if (![view isKindOfClass:[UISearchBar class]]) {
+        const char *selfnm = class_getName(object_getClass(view));
+        BOOL selfIsBar = selfnm && (strstr(selfnm, "WCSearchBar") || strstr(selfnm, "MMUISearchBar"));
+        if (!selfIsBar) {
+            for (UIView *s in view.subviews) {
+                const char *sn = class_getName(object_getClass(s));
+                if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar") ||
+                           strstr(sn, "SearchBar") || strstr(sn, "searchBox"))) {
+                    WDStyleSearch(s, inset, radius, continuous, tag);
+                    return;
+                }
+            }
+        }
+    }
     if ([view isKindOfClass:[UISearchBar class]]) {
+        UIView *tf = WDSearchInnerBox(view);
+        if (tf && tf != view) {
+            CGFloat br = MIN(radius, tf.bounds.size.height > 1 ? tf.bounds.size.height / 2.0 : radius);
+            WDStyleRound(tf, br, continuous, tag);
+        }
         if (inx > 0.5) WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
         return;
     }
@@ -1033,7 +1150,10 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
     WDClearFillViews(cell, 0);
     WDClearFillViews(cell.contentView, 0);
     BOOL catRow = WDIsContactsCategoryCell(cell, tv, ip);
-    if (!catRow) {
+    if (catRow) {
+        // 五大类（含标签）禁止 nudge：复用会话/联系人行残留 transform 会偶发错位。
+        WDClearNudgeDeep(cell, 0);
+    } else {
         WDHideArrows(cell, 0);
         if (cell.accessoryType == UITableViewCellAccessoryDisclosureIndicator) {
             cell.accessoryType = UITableViewCellAccessoryNone;
@@ -1042,8 +1162,8 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
             cell.accessoryView.hidden = YES;
             cell.accessoryView.alpha = 0;
         }
+        WDBalanceInner(cell, inx);
     }
-    WDBalanceInner(cell, inx);
     WDApplySelected(cell, inx, radius, corners);
     (void)continuous;
 }
@@ -1123,17 +1243,7 @@ void WDStyleRevertView(UIView *view) {
             cell.contentView.frame = UIEdgeInsetsInsetRect(cell.bounds, UIEdgeInsetsZero);
             objc_setAssociatedObject(cell, kWDInsetKey, nil, WD_ASSOC);
         }
-        UIView *cv = cell.contentView ?: cell;
-        for (UIView *s in cv.subviews) {
-            @try {
-                id head = [s valueForKey:@"m_frameHeadView"];
-                if ([head isKindOfClass:[UIView class]]) WDClearNudge((UIView *)head);
-            } @catch (NSException *e) {}
-            @try {
-                id time = [s valueForKey:@"m_timeLabel"];
-                if ([time isKindOfClass:[UIView class]]) WDClearNudge((UIView *)time);
-            } @catch (NSException *e) {}
-        }
+        WDClearNudgeDeep(cell, 0);
         WDRevertRound(cell.contentView);
         UIView *sv = cell.superview;
         while (sv && ![sv isKindOfClass:[UITableView class]]) sv = sv.superview;
