@@ -22,6 +22,8 @@ static const void *kWDProfileFillKey = &kWDProfileFillKey;
 static const void *kWDOrigFrameKey    = &kWDOrigFrameKey;
 static const void *kWDArrowHiddenKey  = &kWDArrowHiddenKey;
 static const void *kWDTailClearKey    = &kWDTailClearKey;
+// 搜索栏：为露出胶囊清掉沿途白底容器，记录下来以便还原
+static const void *kWDClearedViewsKey = &kWDClearedViewsKey;
 // 记录"这次刷上去的参数"，系统重新布局后可以原样重贴（防回弹 / 防错位）
 static const void *kWDStyleKindKey    = &kWDStyleKindKey;
 static const void *kWDStyleInsetKey   = &kWDStyleInsetKey;
@@ -918,9 +920,16 @@ BOOL WDStyleIsSearchBarLike(UIView *v) {
 
 // 子树里有没有真正的输入框（只看 3 层，够用且快）
 static BOOL WDHasTextFieldIn(UIView *v, int depth);
-
 BOOL WDStyleHasTextField(UIView *v) {
     return WDHasTextFieldIn(v, 0);
+}
+
+// root 子树里是否包含 target
+static BOOL WDSubtreeContains(UIView *root, UIView *target, int depth) {
+    if (!root || depth > 6) return NO;
+    if (root == target) return YES;
+    for (UIView *s in root.subviews) if (WDSubtreeContains(s, target, depth + 1)) return YES;
+    return NO;
 }
 
 static BOOL WDHasTextFieldIn(UIView *v, int depth) {
@@ -955,6 +964,21 @@ static UIView *WDFindSearchBar(UIView *v, int depth) {
     return nil;
 }
 
+// 最外层的那个"搜索栏本体"（表头清理时要跳过它和它的子树）
+UIView *WDStyleFindSearchRoot(UIView *v) {
+    if (!v) return nil;
+    if (WDStyleIsSearchBarLike(v) ||
+        (v.bounds.size.height <= 96 && WDHasTextFieldIn(v, 0))) return v;
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.alpha < 0.05) continue;
+        UIView *r = WDStyleFindSearchRoot(s);
+        if (r) return r;
+    }
+    return nil;
+}
+
+static UIView *WDSearchInnerBox(UIView *view);
+static UIView *WDCapsuleAroundField(UITextField *tf, UIView *bar);
 static UIView *WDSearchInnerBox(UIView *view) {
     if (!view) return nil;
     UIView *container = nil;
@@ -975,11 +999,12 @@ static UIView *WDSearchInnerBox(UIView *view) {
             if ([tf isKindOfClass:[UIView class]]) return (UIView *)tf;
         } @catch (NSException *e) {}
     }
-    // 宽搜：在所有"内含输入框"的候选里挑最里面（面积最小）的那个，
-    // 以前挑最大的会把整块外壳当成胶囊，于是又变回双层方角。
+    // 宽搜：在所有"内含输入框"的候选里挑最像输入条的那个 ——
+    // 优先高度 ≤48 的（真正的一行输入条），再取最矮的。
+    // 以前按"面积最小"挑会挑到整块 60~70pt 高的白底容器，整条搜索栏就变成了巨型胶囊。
     NSMutableArray *q = [NSMutableArray arrayWithArray:view.subviews];
     UIView *best = nil;
-    CGFloat bestArea = CGFLOAT_MAX;
+    CGFloat bestScore = CGFLOAT_MAX;
     int n = 0;
     while (q.count && n < 30) {
         UIView *cur = q.firstObject;
@@ -987,18 +1012,33 @@ static UIView *WDSearchInnerBox(UIView *view) {
         n++;
         const char *nm = class_getName(object_getClass(cur));
         if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
-        if ([cur isKindOfClass:[UITextField class]]) {
-            UIView *p = cur.superview;
-            if (p && p != view && p.bounds.size.height <= 60) return p;
-            return cur;
-        }
+        if ([cur isKindOfClass:[UITextField class]]) return WDCapsuleAroundField(cur, view);
         if (cur != view && WDHasTextFieldIn(cur, 0)) {
-            CGFloat a = cur.bounds.size.width * cur.bounds.size.height;
-            if (a > 0 && a < bestArea) { bestArea = a; best = cur; }
+            CGFloat h = cur.bounds.size.height;
+            CGFloat score = (h > 0 && h <= 48 ? h : 1000 + h);
+            if (score < bestScore) { bestScore = score; best = cur; }
         }
         if (cur.subviews.count && n < 24) [q addObjectsFromArray:cur.subviews];
     }
     return best;
+}
+
+// 从输入框往上找"真正画了底"的那层胶囊：
+// 条件 = 高度 ≤48 且有自己的背景色；遇到高度 >48 的容器就停（那是搜索栏的外壳，不是胶囊）
+static UIView *WDCapsuleAroundField(UITextField *tf, UIView *bar) {
+    UIView *best = nil;
+    UIView *cur = tf;
+    for (int i = 0; i < 5 && cur; i++) {
+        UIView *p = cur.superview;
+        if (!p || p == bar || p == tf) break;
+        CGFloat h = p.bounds.size.height;
+        if (h > 48) break;
+        UIColor *bg = p.backgroundColor;
+        BOOL painted = bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05;
+        if (painted || !best) best = p;   // 画了底的取更高一层（整颗胶囊）；都没画底时取最近的
+        cur = p;
+    }
+    return best ?: tf;
 }
 
 // 摘掉可能残留的底板：搜索栏只要一层外观，底板 + 内层胶囊就是"双层搜索栏"
@@ -1045,6 +1085,8 @@ static void WDSearchNarrowBox(UIView *box, UIView *bar, CGFloat inx) {
     box.frame = want;
 }
 
+static void WDClearMiddleLayers(UIView *root, UIView *capsule, NSMutableArray *sink);
+
 void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!view) return;
     if (WDStyleShouldSkip(view)) return;
@@ -1088,18 +1130,47 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         WDSearchNarrow(view, inx);
         if (fabs(capsule.frame.size.width - w0) < 0.5) WDSearchNarrowBox(capsule, view, inx);
         CGFloat ch = capsule.bounds.size.height;
-        WDStyleRound(capsule, MIN(radius, ch > 1 ? ch / 2.0 : radius), continuous, tag);
+        // 全圆（半径=高/2）只对真正的输入条用；再高的容器全圆就变成巨型胶囊了
+        CGFloat br = (ch > 0 && ch <= 48) ? MIN(radius, ch / 2.0) : MIN(radius, 18.0);
+        WDStyleRound(capsule, br, continuous, tag);
         if (gColMaster && gInOn) {
             UIColor *inC = WDResolvedIn();
             if (inC) capsule.backgroundColor = inC;
             @try { [view setValue:inC forKey:@"searchBoxContainerColor"]; } @catch (NSException *e) {}
         }
+        // 胶囊外面如果还套着画了底的容器（60~70pt 高的白条），一并清掉，
+        // 否则就是截图里那种"巨型白色胶囊"
+        NSMutableArray *sink = objc_getAssociatedObject(view, kWDClearedViewsKey);
+        if (![sink isKindOfClass:[NSMutableArray class]]) sink = [NSMutableArray array];
+        WDClearMiddleLayers(view, capsule, sink);
+        objc_setAssociatedObject(view, kWDClearedViewsKey, sink, WD_ASSOC);
         return;
     }
     // 没有内层：它自己就是那一条，收窄后补一张圆角卡
     WDSearchNarrow(view, inx);
     WDPlacePlate(view, view.bounds, 0, radius, 15, NO, NO, NO);
-    WDStyleRound(view, MIN(radius, view.bounds.size.height / 2.0), continuous, tag);
+    CGFloat sh = view.bounds.size.height;
+    WDStyleRound(view, (sh > 0 && sh <= 48) ? MIN(radius, sh / 2.0) : MIN(radius, 18.0), continuous, tag);
+}
+
+// 胶囊到搜索栏外壳之间凡是"画了底"的中间层都清透明（记录以便还原）
+static void WDClearMiddleLayers(UIView *root, UIView *capsule, NSMutableArray *sink) {
+    if (!root || root == capsule || !sink) return;
+    for (UIView *s in root.subviews) {
+        if (!WDSubtreeContains(s, capsule, 0)) continue;
+        if (s != capsule && s.bounds.size.height > 48) {
+            UIColor *bg = s.backgroundColor;
+            if (bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05) {
+                if (!objc_getAssociatedObject(s, kWDOrigBgColorKey)) {
+                    objc_setAssociatedObject(s, kWDOrigBgColorKey, bg, WD_ASSOC);
+                }
+                if (![sink containsObject:s]) [sink addObject:s];
+                s.backgroundColor = [UIColor clearColor];
+                s.opaque = NO;
+            }
+        }
+        WDClearMiddleLayers(s, capsule, sink);
+    }
 }
 
 static void WDClearFillsDeep(UIView *v, int depth) {
@@ -1338,8 +1409,9 @@ void WDStyleMePage(UIViewController *vc, CGFloat inset, CGFloat radius, BOOL con
     } @catch (NSException *e) {}
 }
 
-static void WDClearHeaderRecur(UIView *v, int depth) {
+static void WDClearHeaderRecur(UIView *v, int depth, UIView *keep) {
     if (!v || depth > 5) return;
+    if (v == keep) return;   // 搜索栏子树不碰（胶囊底色会被它清掉）
     v.backgroundColor = [UIColor clearColor];
     v.opaque = NO;
     const char *nm = class_getName(object_getClass(v));
@@ -1361,10 +1433,15 @@ static void WDClearHeaderRecur(UIView *v, int depth) {
         v.alpha = 0;
         return;
     }
-    for (UIView *s in v.subviews) WDClearHeaderRecur(s, depth + 1);
+    for (UIView *s in v.subviews) WDClearHeaderRecur(s, depth + 1, keep);
 }
 
 void WDStyleClearHeader(UIView *view) {
+    WDStyleClearHeaderExcept(view, nil);
+}
+
+// keep = 搜索栏根：表头里带搜索栏时，清表头但保留搜索栏子树
+void WDStyleClearHeaderExcept(UIView *view, UIView *keep) {
     if (!view) return;
     if ([view isKindOfClass:[UITableViewHeaderFooterView class]]) {
         UITableViewHeaderFooterView *hf = (UITableViewHeaderFooterView *)view;
@@ -1373,15 +1450,7 @@ void WDStyleClearHeader(UIView *view) {
         hf.backgroundView.backgroundColor = [UIColor clearColor];
         hf.tintColor = [UIColor clearColor];
     }
-    if ([view isKindOfClass:[UILabel class]]) {
-        ((UILabel *)view).backgroundColor = [UIColor clearColor];
-        view.opaque = NO;
-    }
-    if ([view isKindOfClass:[UIVisualEffectView class]]) {
-        ((UIVisualEffectView *)view).effect = nil;
-        view.backgroundColor = [UIColor clearColor];
-    }
-    WDClearHeaderRecur(view, 0);
+    WDClearHeaderRecur(view, 0, keep);
     UIView *p = view.superview;
     int u = 0;
     while (p && u < 5) {
@@ -1606,10 +1675,18 @@ void WDStyleRevertView(UIView *view) {
             [pfill removeFromSuperview];
             objc_setAssociatedObject(view, kWDProfileFillKey, nil, WD_ASSOC);
         }
+        // 搜索栏沿途清掉的白底容器，一个个放回去
+        NSArray *cleared = objc_getAssociatedObject(view, kWDClearedViewsKey);
+        for (UIView *cv in cleared) {
+            if (![cv isKindOfClass:[UIView class]]) continue;
+            id obc = objc_getAssociatedObject(cv, kWDOrigBgColorKey);
+            cv.backgroundColor = [obc isKindOfClass:[UIColor class]] ? (UIColor *)obc : nil;
+            objc_setAssociatedObject(cv, kWDOrigBgColorKey, nil, WD_ASSOC);
+        }
+        objc_setAssociatedObject(view, kWDClearedViewsKey, nil, WD_ASSOC);
         UIView *box = WDSearchInnerBox(view);
         if (box) {
-            NSValue *bf = objc_getAssociatedObject(box, kWDOrigFrameKey);
-            if (bf) {
+            NSValue *bf = objc_getAssociatedObject(box, kWDOrigFrameKey);            if (bf) {
                 box.frame = [bf CGRectValue];
                 objc_setAssociatedObject(box, kWDOrigFrameKey, nil, WD_ASSOC);
             }

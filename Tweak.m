@@ -898,7 +898,15 @@ static BOOL WDHookWillDisplayHeader(const char *clsName) {
             if ([header isKindOfClass:[UIView class]]) {
                 const char *nm = class_getName(object_getClass(header));
                 BOOL hasSearch = WDTreeHasSearchBar(header, 0);
-                if (hasSearch) WDStyleSearchTree(header);
+                if (hasSearch) {
+                    WDStyleSearchTree(header);
+                    // 表头本身也要清白底，但跳过搜索栏子树 —— 不清的话就是
+                    // 截图里那种「整个表头一条白」；之前整段跳过就是这个原因
+                    if (WDHeaderOn()) {
+                        UIView *root = WDStyleFindSearchRoot(header) ?: header;
+                        WDStyleClearHeaderExcept(header, root);
+                    }
+                }
                 if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner"))) {
                     WDDecorateViewTree(header, 0);
                 } else if (WDHeaderOn() && !hasSearch) {
@@ -973,7 +981,13 @@ static BOOL WDHookViewForHeader(const char *clsName) {
             @try {
                 // 搜索栏经常就挂在表头上（首页 / 通讯录），这里不刷就永远是方的
                 BOOL hasSearch = WDTreeHasSearchBar((UIView *)r, 0);
-                if (hasSearch) WDStyleSearchTree((UIView *)r);
+                if (hasSearch) {
+                    WDStyleSearchTree((UIView *)r);
+                    if (WDHeaderOn()) {
+                        UIView *root = WDStyleFindSearchRoot((UIView *)r) ?: (UIView *)r;
+                        WDStyleClearHeaderExcept((UIView *)r, root);
+                    }
+                }
                 const char *nm = class_getName(object_getClass(r));
                 if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner"))) WDDecorateViewTree((UIView *)r, 0);
                 else if (WDHeaderOn() && !hasSearch) WDStyleClearHeader((UIView *)r);
@@ -1668,8 +1682,13 @@ static void WDDecorateVisible(void) {
                 }
                 if (tv.tableFooterView && WDHeaderOn()) @try { WDStyleClearHeader(tv.tableFooterView); } @catch (NSException *e) {}
                 if (tv.tableHeaderView && WDTreeHasSearchBar(tv.tableHeaderView, 0)) {
-                    // 面板本身也可能就是搜索栏，交给 WDStyleSearchTree 自己找内层
-                    @try { WDStyleSearchTree(tv.tableHeaderView); } @catch (NSException *e) {}
+                    // 面板本身也可能就是搜索栏，交给 WDStyleSearchTree 自己找内层；
+                    // 表头白底也要清（跳过搜索栏子树），否则表头就是一条白
+                    @try {
+                        UIView *root = WDStyleFindSearchRoot(tv.tableHeaderView) ?: tv.tableHeaderView;
+                        WDStyleSearchTree(tv.tableHeaderView);
+                        if (WDHeaderOn()) WDStyleClearHeaderExcept(tv.tableHeaderView, root);
+                    } @catch (NSException *e) {}
                 }
                 WDClearCountOnOwner(WDOwnerVC(tv));
             } else if ([v isKindOfClass:[UICollectionView class]]) {
