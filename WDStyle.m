@@ -1863,7 +1863,7 @@ static BOOL WDRelayoutBusy(UIView *v) {
 // 侧滑操作条：微信把操作按钮原生存到 cell 右缘（= 屏幕边），
 // 卡片内缩后按钮会冲出卡片右边界。样式时把这类「几乎全高、宽≥60、
 // 横在右缘」的子条右缘收到卡片边（静止时它藏在内容下面，挪了也看不见）。
-static void WDClampSwipeStrips(UIView *cell, CGFloat inx) {
+static void WDClampSwipeStrips(UITableViewCell *cell, CGFloat inx) {
     if (!cell || inx < 1) return;
     CGFloat w = cell.bounds.size.width, h = cell.bounds.size.height;
     if (w < 100 || h < 30) return;
