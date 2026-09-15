@@ -111,11 +111,19 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.16
-          name: WechatDuo v1.1.16
+          tag_name: v1.1.17
+          name: WechatDuo v1.1.17
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.17**
+              - 搜索栏：不再按类名猜，改为按「是否真的含输入框」判定；缩进改为收窄整条搜索栏，
+                不再去挪胶囊，自动布局也不会把它打回原形
+              - 搜索栏不再被页面底色覆盖（`WDPaintTree` 曾把 SearchBar 整块刷成页面色）
+              - 通讯录点一下卡片就错位：布局后自动把内缩贴回去，不再被系统复位
+              - 「新的朋友」/「我」页进出闪烁：样式改在可见前完成，且全程关掉隐式动画
+              - 清理死代码（WDTabTitle / WDCatalogIndexesForGroup / WDNudgeKey / 空 reload 等），
+                补全 gSnap 索引上界判断，移除无效的 WCSearchViewController 钩子
             - **v1.1.16**
               - 通讯录五大类与好友行不再错位：内部元素超出卡片时「收窄」而非「平移」
               - 「新的朋友」、「我」页资料卡：改动挪到 viewWillAppear，进页面不再闪一下

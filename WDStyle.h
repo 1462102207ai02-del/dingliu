@@ -15,9 +15,14 @@ void WDStyleMePage(UIViewController *vc, CGFloat inset, CGFloat radius, BOOL con
 void WDStyleClearHeader(UIView *view);
 void WDStyleClearTableTail(UIView *root);
 BOOL WDStyleIsSearchBarLike(UIView *view);
+BOOL WDStyleHasTextField(UIView *view);
 void WDStyleHostCard(UIView *host, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 
 void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL continuous);
+
+void WDStyleSetContinuous(BOOL on);
+void WDStyleCellRelayout(UITableViewCell *cell);
+void WDStyleRelayoutView(UIView *view);
 
 int  WDStyleTagOf(UIView *view);
 void WDStyleRevertView(UIView *view);

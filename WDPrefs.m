@@ -316,8 +316,6 @@ NSString *WDHexForColor(UIColor *c) {
     return c;
 }
 
-- (void)reload { /* NSUserDefaults 同进程即时可读 */ }
-
 - (void)ping {
     [_ud synchronize];
     [[NSNotificationCenter defaultCenter] postNotificationName:WDPrefsDidChangeNotification object:nil];

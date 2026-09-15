@@ -19,8 +19,16 @@ static int gInstalled = 0;
 static int gSafe = 0;
 static BOOL gMaster = YES;
 static BOOL gContinuous = YES;
-static float gHomeR = 16.f;
-static float gHomeI = 12.f;
+
+// 改外观时关掉隐式动画：页面进出时这些改动如果带着动画，用户就会看到"闪一下"
+static void WDNoAnim(dispatch_block_t work) {
+    if (!work) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    @try { [UIView performWithoutAnimation:work]; }
+    @catch (NSException *e) { @try { work(); } @catch (NSException *e2) {} }
+    [CATransaction commit];
+}
 
 typedef struct { char on; float r; float i; int kind; } WDSnap;
 static WDSnap gSnap[160];
@@ -171,11 +179,8 @@ static void WDSnapshot(void) {
         gSnap[i].r = (float)[p radiusForClass:name def:items[i].defRadius];
         gSnap[i].i = (float)[p insetForClass:name def:items[i].defInset];
         gSnap[i].kind = items[i].kind;
-        if (strcmp(items[i].cls, "NewMainFrameCell") == 0) {
-            gHomeR = gSnap[i].r;
-            gHomeI = gSnap[i].i;
-        }
     }
+    WDStyleSetContinuous(gContinuous);
     char on = [p cardOutEnabled] ? 1 : 0;
     NSString *l = [p cardOutHexDark:NO];
     NSString *d = [p cardOutHexDark:YES];
@@ -336,7 +341,7 @@ static BOOL WDHookOwner(Class owner, int fallbackIdx) {
         if (gDepth >= WD_MAX_DEPTH) return;
         int idx = WDIdxForClass(object_getClass(slf));
         if (idx < 0) idx = fallbackIdx;
-        if (idx < 0) return;
+        if (idx < 0 || idx >= 160) return;
         if (!gMaster || !gSnap[idx].on) {
             if ([slf isKindOfClass:[UIView class]] && WDStyleTagOf((UIView *)slf) >= 0) {
                 gDepth++;
@@ -358,7 +363,6 @@ static BOOL WDHookOwner(Class owner, int fallbackIdx) {
 #pragma mark - getter
 
 static const struct { const char *cls; const char *sel; } kGetters[] = {
-    {"WCSearchViewController", "navBarContainerView"},
     {"MMNewMsgContentNavBar", "bgMaskView"},
 };
 static IMP gGetOrig[2];
@@ -376,7 +380,7 @@ static id WDGetterIMP(id self, SEL _cmd) {
         }
     }
     id r = orig ? ((id (*)(id, SEL))orig)(self, _cmd) : nil;
-    if (gLive && gMaster && !gSafe && idx >= 0 && gSnap[idx].on && [r isKindOfClass:[UIView class]]) {
+    if (gLive && gMaster && !gSafe && idx >= 0 && idx < 160 && gSnap[idx].on && [r isKindOfClass:[UIView class]]) {
         WDStyleRound((UIView *)r, gSnap[idx].r, gContinuous, idx);
     }
     return r;
@@ -415,12 +419,17 @@ static void WDStyleSearchIfOn(UIView *v) {
     NSString *sname = @(WDCatalogItems()[idx].cls);
     CGFloat r = [sp hasCustomRadius:sname] ? gSnap[idx].r : sp.globalRadius;
     CGFloat i = [sp hasCustomInset:sname] ? gSnap[idx].i : sp.globalInset;
+    // 装上"布局后重贴"：不装的话系统下一次布局就把搜索栏打回原形
+    WDEnsureRelayoutHook(object_getClass(v));
     WDStyleSearch(v, i, r, gContinuous, idx);
 }
 
 static BOOL WDTreeHasSearchBar(UIView *v, int depth) {
     if (!v || depth > 4) return NO;
+    // 光看类名会漏（首页 / 通讯录的搜索面板类名各版本都不一样），
+    // 所以"子树里有真输入框 + 高度像搜索条"也算数
     if (WDStyleIsSearchBarLike(v)) return YES;
+    if (v.bounds.size.height <= 96 && WDStyleHasTextField(v)) return YES;
     for (UIView *s in v.subviews) if (WDTreeHasSearchBar(s, depth + 1)) return YES;
     return NO;
 }
@@ -584,9 +593,10 @@ static void WDPaintTree(UIViewController *vc, UIColor *want) {
                    strstr(nm, "CustomBar") || strstr(nm, "TopHeader") ||
                    strstr(nm, "fakeNav") || strstr(nm, "NavigationBar"))) continue;
         if ([s isKindOfClass:[UIScrollView class]]) WDPaintView(s, want);
-        if (nm && strstr(nm, "SearchBar")) {
-            WDPaintView(s, want);
-        }
+        // 搜索栏的着色归 WDStyleSearch 管（它要把外壳刷透明、只留胶囊），
+        // 这里再刷一遍页面底色就会把刚做好的搜索栏盖掉 —— 之前"搜索栏怎么改都不对"就是这么来的
+        if (nm && (strstr(nm, "SearchBar") || strstr(nm, "SearchPanel") ||
+                   strstr(nm, "searchBox") || strstr(nm, "SearchBox"))) continue;
     }
 }
 
@@ -854,10 +864,10 @@ static void WDDecorateViewTree(UIView *v, int depth) {
         const char *nm = class_getName(object_getClass(v));
         if (nm && strstr(nm, "FoldView")) {
             if (gDefBannerIdx == -2) gDefBannerIdx = WDIndexOfClassName("MainFrameSectionFoldView");
-            if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) WDStyleFold(v, gSnap[gDefBannerIdx].i, gSnap[gDefBannerIdx].r, gContinuous, gDefBannerIdx);
+            if (gDefBannerIdx >= 0 && gDefBannerIdx < 160 && gSnap[gDefBannerIdx].on) WDStyleFold(v, gSnap[gDefBannerIdx].i, gSnap[gDefBannerIdx].r, gContinuous, gDefBannerIdx);
         } else if (nm && strstr(nm, "TextStateProfileCard")) {
             int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
-            if (pidx >= 0 && gSnap[pidx].on) WDStyleProfile(v, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
+            if (pidx >= 0 && pidx < 160 && gSnap[pidx].on) WDStyleProfile(v, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
         } else if (nm && (strstr(nm, "SearchPanel") || strstr(nm, "SearchBar") ||
                           strstr(nm, "WCSearchBar") || strstr(nm, "MMUISearchBar") ||
                           strstr(nm, "FavSearchBar") || strstr(nm, "ContactsSearch"))) {
@@ -941,7 +951,6 @@ static BOOL WDHookFoldUpdate(void);
 static void WDClearCountOnOwner(UIViewController *own);
 static BOOL WDHookFoldState(void);
 static BOOL WDHookTabSelect(void);
-static BOOL WDHookTabAppear(const char *clsName);
 static BOOL WDHookTabWillAppear(const char *clsName);
 static BOOL WDHookProfileLayout(const char *clsName);
 static BOOL WDHookMeLayout(const char *clsName);
@@ -1124,7 +1133,7 @@ static BOOL WDHookProfileLayout(const char *clsName) {
         if (![NSThread isMainThread]) return;
         if (![slf isKindOfClass:[UIView class]]) return;
         int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
-        if (pidx >= 0 && gSnap[pidx].on) {
+        if (pidx >= 0 && pidx < 160 && gSnap[pidx].on) {
             @try { WDStyleProfile((UIView *)slf, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
         }
     });
@@ -1151,7 +1160,7 @@ static BOOL WDHookMeLayout(const char *clsName) {
         if (![NSThread isMainThread]) return;
         if (![slf isKindOfClass:[UIViewController class]]) return;
         int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
-        if (pidx >= 0 && gSnap[pidx].on) {
+        if (pidx >= 0 && pidx < 160 && gSnap[pidx].on) {
             @try { WDStyleMePage((UIViewController *)slf, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
         }
     });
@@ -1163,6 +1172,120 @@ static BOOL WDHookMeLayout(const char *clsName) {
 
 // 新的朋友 / 好友申请这类页面：内容短，底部会露出一大片底色，刷成页面底色。
 // 挂在 viewWillAppear（页面可见之前）而不是 viewDidAppear，否则会看到"闪一下"。
+#define WD_RELAYOUT_MAX 24
+static Class gRelayoutCls[WD_RELAYOUT_MAX];
+static int gRelayoutN = 0;
+
+static BOOL WDRelayoutForbidden(Class cls) {
+    if (!cls) return YES;
+    if (cls == [UIView class] || cls == [UIScrollView class] || cls == [UITableView class] ||
+        cls == [UIControl class] || cls == [UILabel class] || cls == [UIImageView class] ||
+        cls == [UITableViewCell class] || cls == [UIWindow class]) return YES;
+    const char *nm = class_getName(cls);
+    if (!nm || !nm[0]) return YES;
+    if (nm[0] == 'W' && nm[1] == 'D') return YES;   // 自己的类不碰
+    if (strncmp(nm, "UI", 2) == 0) return YES;       // UIKit 基类不碰
+    return NO;
+}
+
+// 给"刚被我们刷过的那个类"装一次 layoutSubviews 钩子。
+// 系统每次重新布局都会把 frame / 底色打回原形；装上它就能在同一帧里贴回去，
+// 于是既不会闪，也不会被自动布局冲掉（搜索栏一直修不好就是被冲掉了）。
+static void WDEnsureRelayoutHook(Class cls) {
+    if (!cls) return;
+    if (WDRelayoutForbidden(cls)) return;
+    for (int i = 0; i < gRelayoutN; i++) if (gRelayoutCls[i] == cls) return;
+    SEL s = @selector(layoutSubviews);
+    Method m = class_getInstanceMethod(cls, s);
+    BOOL owns = (WDOwns(cls, s) && m) ? YES : NO;
+    IMP orig = owns ? method_getImplementation(m) : NULL;
+    Class sup = class_getSuperclass(cls);
+    IMP supImp = sup ? class_getMethodImplementation(sup, s) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        if (orig) ((void (*)(id, SEL))orig)(slf, s);
+        else if (supImp) ((void (*)(id, SEL))supImp)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        if (![slf isKindOfClass:[UIView class]]) return;
+        @try { WDStyleRelayoutView((UIView *)slf); } @catch (NSException *e) {}
+    });
+    if (!stub) return;
+    BOOL ok = NO;
+    if (owns) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && gRelayoutN < WD_RELAYOUT_MAX) gRelayoutCls[gRelayoutN++] = cls;
+}
+
+// 卡片行：点一下就会触发 layoutSubviews，contentView 被系统复位成整宽，
+// 我们做的内缩就丢了 —— 内容看起来就"错位"了。布局后贴回去即可。
+static void WDHookCellLayout(void) {
+    static int done = 0;
+    if (done) return;
+    Class cls = [UITableViewCell class];
+    SEL s = @selector(layoutSubviews);
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return;
+    static IMP orig = NULL;
+    orig = method_getImplementation(m);
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        if (orig) ((void (*)(id, SEL))orig)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { WDStyleCellRelayout((UITableViewCell *)slf); } @catch (NSException *e) {}
+    });
+    if (!stub) return;
+    method_setImplementation(m, stub);
+    done = 1;
+}
+
+// 页面级样式：viewDidLayoutSubviews 发生在"这一帧画出来之前"，
+// 在这里贴样式，用户永远看不到中间态 —— 这是消掉进出闪烁的关键。
+static BOOL WDHookDidLayout(const char *clsName, int kind) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(viewDidLayoutSubviews);
+    Method m = class_getInstanceMethod(cls, s);
+    static Class hooked[32];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    Class sup = class_getSuperclass(cls);
+    IMP supImp = sup ? class_getMethodImplementation(sup, s) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf) {
+        if (orig) ((void (*)(id, SEL))orig)(slf, s);
+        else if (supImp) ((void (*)(id, SEL))supImp)(slf, s);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        if (![slf isKindOfClass:[UIViewController class]]) return;
+        UIViewController *vc = (UIViewController *)slf;
+        if (!vc.isViewLoaded || !vc.view) return;
+        WDNoAnim(^{
+            @try {
+                if (kind == 1) {
+                    WDStyleClearTableTail(vc.view);
+                } else if (kind == 2) {
+                    int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+                    if (pidx >= 0 && pidx < 160 && gSnap[pidx].on) {
+                        WDStyleMePage(vc, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
+                    }
+                }
+            } @catch (NSException *e) {}
+        });
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 32) hooked[hookedN++] = cls;
+    return ok;
+}
+
 static BOOL WDHookTailClear(const char *clsName) {
     Class cls = objc_getClass(clsName);
     if (!cls) return NO;
@@ -1179,11 +1302,8 @@ static BOOL WDHookTailClear(const char *clsName) {
         if (![slf isKindOfClass:[UIViewController class]]) return;
         UIViewController *vc = (UIViewController *)slf;
         if (!vc.isViewLoaded || !vc.view) return;
-        @try { WDStyleClearTableTail(vc.view); } @catch (NSException *e) {}
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(350 * NSEC_PER_MSEC)),
-                       dispatch_get_main_queue(), ^{
-            @try { WDStyleClearTableTail(vc.view); } @catch (NSException *e) {}
-        });
+        // 只在这里做一次；以前还挂了个 350ms 后的补刷，那时页面早就可见了 —— 那才是"闪一下"
+        WDNoAnim(^{ @try { WDStyleClearTableTail(vc.view); } @catch (NSException *e) {} });
     });
     if (!stub) return NO;
     BOOL ok = NO;
@@ -1204,7 +1324,11 @@ static void WDInstallTableDisplay(void) {
         "ApplyFriendListViewController", "FriendAsistSessionViewController",
         "AddFriendEntryViewController", NULL
     };
-    for (int i = 0; kTailVCs[i]; i++) WDHookTailClear(kTailVCs[i]);
+    for (int i = 0; kTailVCs[i]; i++) {
+        WDHookTailClear(kTailVCs[i]);
+        WDHookDidLayout(kTailVCs[i], 1);
+    }
+    WDHookCellLayout();
     static const char *kVCs[] = {
         "NewMainFrameViewController",
         "ContactsViewController",
@@ -1249,10 +1373,8 @@ static void WDInstallTableDisplay(void) {
     WDHookFoldUpdate();
     WDHookFoldState();
     WDHookTabSelect();
-    WDHookTabAppear("NewMainFrameViewController");
-    WDHookTabAppear("ContactsViewController");
-    WDHookTabAppear("FindFriendEntryViewController");
-    WDHookTabAppear("MoreViewController");
+    WDHookDidLayout("MoreViewController", 2);
+    WDHookDidLayout("NewSettingViewController", 2);
     WDHookTabWillAppear("NewMainFrameViewController");
     WDHookTabWillAppear("ContactsViewController");
     WDHookTabWillAppear("FindFriendEntryViewController");
@@ -1316,7 +1438,7 @@ static BOOL WDHookFoldState(void) {
         if (![NSThread isMainThread]) return;
         if (![slf isKindOfClass:[UIView class]]) return;
         if (gDefBannerIdx == -2) gDefBannerIdx = WDIndexOfClassName("MainFrameSectionFoldView");
-        if (gDefBannerIdx >= 0 && gSnap[gDefBannerIdx].on) {
+        if (gDefBannerIdx >= 0 && gDefBannerIdx < 160 && gSnap[gDefBannerIdx].on) {
             @try { WDStyleFold((UIView *)slf, gSnap[gDefBannerIdx].i, gSnap[gDefBannerIdx].r, gContinuous, gDefBannerIdx); } @catch (NSException *e) {}
         }
     });
@@ -1349,8 +1471,8 @@ static BOOL WDHookTabSelect(void) {
     return ok;
 }
 
-// 与 WDHookTabAppear 做同样的事，但抢在页面可见之前完成 —— 页面底色 / 资料卡
-// 若是可见之后才改，用户就会看到"闪一下"。
+// 页面底色 / 资料卡抢在页面可见之前做完；可见之后再改，用户就会看到"闪一下"。
+// 后续每次 viewDidLayoutSubviews 还会无动画地重贴一次（见 WDHookDidLayout）。
 static BOOL WDHookTabWillAppear(const char *clsName) {
     Class cls = objc_getClass(clsName);
     if (!cls) return NO;
@@ -1370,47 +1492,14 @@ static BOOL WDHookTabWillAppear(const char *clsName) {
             const char *cn = class_getName([slf class]);
             if (cn && (strstr(cn, "MoreViewController") || strstr(cn, "NewSettingViewController"))) {
                 int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
-                if (pidx >= 0 && gSnap[pidx].on && vc.isViewLoaded && vc.view) {
-                    @try {
-                        [vc.view setNeedsLayout];
-                        [vc.view layoutIfNeeded];
-                        WDStyleMePage(vc, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
-                    } @catch (NSException *e) {}
-                }
-            }
-        }
-    });
-    if (!stub) return NO;
-    BOOL ok = NO;
-    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
-    else {
-        const char *enc = m ? method_getTypeEncoding(m) : "v@:B";
-        ok = class_addMethod(cls, s, stub, enc);
-    }
-    if (ok && hookedN < 32) hooked[hookedN++] = cls;
-    return ok;
-}
-
-static BOOL WDHookTabAppear(const char *clsName) {
-    Class cls = objc_getClass(clsName);
-    if (!cls) return NO;
-    SEL s = @selector(viewDidAppear:);
-    Method m = class_getInstanceMethod(cls, s);
-    static Class hooked[32];
-    static int hookedN = 0;
-    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
-    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
-    IMP stub = imp_implementationWithBlock(^(id slf, BOOL animated) {
-        if (orig) ((void (*)(id, SEL, BOOL))orig)(slf, s, animated);
-        if (!gLive || !gMaster || gSafe) return;
-        if (![NSThread isMainThread]) return;
-        @try { WDPageBgApply(); } @catch (NSException *e) {}
-        if ([slf isKindOfClass:[UIViewController class]]) {
-            const char *cn = class_getName([slf class]);
-            if (cn && strstr(cn, "MoreViewController")) {
-                int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
-                if (pidx >= 0 && gSnap[pidx].on) {
-                    @try { WDStyleMePage((UIViewController *)slf, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}
+                if (pidx >= 0 && pidx < 160 && gSnap[pidx].on && vc.isViewLoaded && vc.view) {
+                    WDNoAnim(^{
+                        @try {
+                            [vc.view setNeedsLayout];
+                            [vc.view layoutIfNeeded];
+                            WDStyleMePage(vc, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
+                        } @catch (NSException *e) {}
+                    });
                 }
             }
         }
@@ -1577,13 +1666,9 @@ static void WDDecorateVisible(void) {
                     if (f && WDHeaderOn()) @try { WDStyleClearHeader(f); } @catch (NSException *e) {}
                 }
                 if (tv.tableFooterView && WDHeaderOn()) @try { WDStyleClearHeader(tv.tableFooterView); } @catch (NSException *e) {}
-                if (tv.tableHeaderView) {
-                    const char *hn = class_getName(object_getClass(tv.tableHeaderView));
-                    if (hn && (strstr(hn, "SearchPanel") || strstr(hn, "SearchBar") ||
-                               strstr(hn, "ContactsSearch") || strstr(hn, "searchBar"))) {
-                        // 面板本身也可能就是搜索栏，交给 WDStyleSearchTree 自己找内层
-                        @try { WDStyleSearchTree(tv.tableHeaderView); } @catch (NSException *e) {}
-                    }
+                if (tv.tableHeaderView && WDTreeHasSearchBar(tv.tableHeaderView, 0)) {
+                    // 面板本身也可能就是搜索栏，交给 WDStyleSearchTree 自己找内层
+                    @try { WDStyleSearchTree(tv.tableHeaderView); } @catch (NSException *e) {}
                 }
                 WDClearCountOnOwner(WDOwnerVC(tv));
             } else if ([v isKindOfClass:[UICollectionView class]]) {
@@ -1592,7 +1677,7 @@ static void WDDecorateVisible(void) {
                 if (on && strstr(on, "WCPayMainViewController")) {
                     int pay = WDIndexOfClassName("WCPayWalletEntryHeaderView");
                     if (pay < 0) pay = WDIndexOfClassName("NewMainFrameCell");
-                    if (pay >= 0 && gSnap[pay].on) @try { WDStyleHostCard(v, gSnap[pay].i, gSnap[pay].r, gContinuous, pay); } @catch (NSException *e) {}
+                    if (pay >= 0 && pay < 160 && gSnap[pay].on) @try { WDStyleHostCard(v, gSnap[pay].i, gSnap[pay].r, gContinuous, pay); } @catch (NSException *e) {}
                 }
             } else {
                 const char *nm = class_getName(object_getClass(v));
@@ -1600,7 +1685,7 @@ static void WDDecorateVisible(void) {
                     @try { WDDecorateViewTree(v, 0); } @catch (NSException *e) {}
                 } else if (nm && (strstr(nm, "TextStateProfileCard") || strstr(nm, "MoreViewController"))) {
                     int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
-                    if (pidx >= 0 && gSnap[pidx].on) {
+                    if (pidx >= 0 && pidx < 160 && gSnap[pidx].on) {
                         UIViewController *own = WDOwnerVC(v);
                         if (own && WDIsMeController(own)) {
                             @try { WDStyleMePage(own, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx); } @catch (NSException *e) {}

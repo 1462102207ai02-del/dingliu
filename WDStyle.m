@@ -11,17 +11,29 @@ static const void *kWDOrigCurveKey   = &kWDOrigCurveKey;
 static const void *kWDOrigCornersKey = &kWDOrigCornersKey;
 static const void *kWDOrigBgKey      = &kWDOrigBgKey;
 static const void *kWDOrigBgColorKey = &kWDOrigBgColorKey;
-static const void *kWDInsetKey       = &kWDInsetKey;
 static const void *kWDTableBgKey     = &kWDTableBgKey;
 static const void *kWDOrigTFKey      = &kWDOrigTFKey;
 static const void *kWDRowsCacheKey   = &kWDRowsCacheKey;
 static const void *kWDCatCacheKey    = &kWDCatCacheKey;
 static const void *kWDSelKey         = &kWDSelKey;
-static const void *kWDSearchBoxFrameKey = &kWDSearchBoxFrameKey;
 static const void *kWDProfileFillKey = &kWDProfileFillKey;
 static const void *kWDOrigFrameKey    = &kWDOrigFrameKey;
 static const void *kWDArrowHiddenKey  = &kWDArrowHiddenKey;
 static const void *kWDTailClearKey    = &kWDTailClearKey;
+// 记录"这次刷上去的参数"，系统重新布局后可以原样重贴（防回弹 / 防错位）
+static const void *kWDStyleKindKey    = &kWDStyleKindKey;
+static const void *kWDStyleInsetKey   = &kWDStyleInsetKey;
+static const void *kWDStyleRadiusKey  = &kWDStyleRadiusKey;
+static const void *kWDStyleBusyKey    = &kWDStyleBusyKey;
+
+enum { WDKindStyleView = 0, WDKindStyleCell = 1, WDKindStyleSearch = 2, WDKindStyleProfile = 3 };
+
+static void WDRecordStyle(UIView *v, int kind, CGFloat inset, CGFloat radius) {
+    if (!v) return;
+    objc_setAssociatedObject(v, kWDStyleKindKey, @(kind), WD_ASSOC);
+    objc_setAssociatedObject(v, kWDStyleInsetKey, @(inset), WD_ASSOC);
+    objc_setAssociatedObject(v, kWDStyleRadiusKey, @(radius), WD_ASSOC);
+}
 
 static BOOL gColMaster = YES;
 static BOOL gInOn = NO;
@@ -42,6 +54,9 @@ void WDStyleSyncColors(BOOL master, BOOL inOn, const char *inL, const char *inD,
     if (outL && outL[0]) snprintf(gOutL, 16, "%s", outL);
     if (outD && outD[0]) snprintf(gOutD, 16, "%s", outD);
 }
+
+static BOOL gStyleCont = YES;
+void WDStyleSetContinuous(BOOL on) { gStyleCont = on; }
 
 static BOOL WDStyleDark(void) {
     if (@available(iOS 13.0, *)) {
@@ -588,14 +603,6 @@ static UIView *WDCellItemView(UITableViewCell *cell) {
     return nil;
 }
 
-static void WDNudgeKey(UIView *host, const char *key, CGFloat dx) {
-    if (!host || !key) return;
-    @try {
-        id v = [host valueForKey:[NSString stringWithUTF8String:key]];
-        if ([v isKindOfClass:[UIView class]]) WDNudgeInner((UIView *)v, dx);
-    } @catch (NSException *e) {}
-}
-
 static id WDSafeValue(id obj, const char *key) {
     if (!obj || !key) return nil;
     @try { return [obj valueForKey:[NSString stringWithUTF8String:key]]; } @catch (NSException *e) { return nil; }
@@ -875,6 +882,7 @@ void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
     }
 
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+    WDRecordStyle(view, WDKindStyleView, inx, radius);
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
@@ -908,11 +916,50 @@ BOOL WDStyleIsSearchBarLike(UIView *v) {
     return NO;
 }
 
+// 子树里有没有真正的输入框（只看 3 层，够用且快）
+static BOOL WDHasTextFieldIn(UIView *v, int depth);
+
+BOOL WDStyleHasTextField(UIView *v) {
+    return WDHasTextFieldIn(v, 0);
+}
+
+static BOOL WDHasTextFieldIn(UIView *v, int depth) {
+    if (!v || depth > 3) return NO;
+    if ([v isKindOfClass:[UITextField class]]) return YES;
+    if ([v isKindOfClass:[UISearchBar class]]) return YES;
+    for (UIView *s in v.subviews) {
+        const char *nm = class_getName(object_getClass(s));
+        if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
+        if (WDHasTextFieldIn(s, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+// 从外壳往下找真正的"那一条"搜索条：高度像输入条，且（像搜索条 或 内含输入框）
+static UIView *WDFindSearchBar(UIView *v, int depth) {
+    if (!v || depth > 5) return nil;
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.alpha < 0.05) continue;
+        const char *nm = class_getName(object_getClass(s));
+        if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
+        CGFloat h = s.bounds.size.height;
+        if (h >= 20 && h <= 64 &&
+            (WDStyleIsSearchBarLike(s) || WDHasTextFieldIn(s, 0))) return s;
+    }
+    for (UIView *s in v.subviews) {
+        const char *nm = class_getName(object_getClass(s));
+        if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
+        UIView *r = WDFindSearchBar(s, depth + 1);
+        if (r) return r;
+    }
+    return nil;
+}
+
 static UIView *WDSearchInnerBox(UIView *view) {
     if (!view) return nil;
     UIView *container = nil;
     static const char *keys[] = { "searchBoxContainer", "searchBox", "m_searchBox",
-                                  "m_searchBoxContainer", "searchTextField", "m_textField", NULL };
+                                  "m_searchBoxContainer", NULL };
     for (int i = 0; keys[i] && !container; i++) {
         id box = WDSafeValue(view, keys[i]);
         if ([box isKindOfClass:[UIView class]] && box != view) container = (UIView *)box;
@@ -927,42 +974,31 @@ static UIView *WDSearchInnerBox(UIView *view) {
             if (![tf isKindOfClass:[UIView class]]) tf = [view valueForKey:@"searchField"];
             if ([tf isKindOfClass:[UIView class]]) return (UIView *)tf;
         } @catch (NSException *e) {}
-        for (UIView *sub in view.subviews) {
-            if ([sub isKindOfClass:[UITextField class]]) return sub;
-            for (UIView *c in sub.subviews) {
-                if ([c isKindOfClass:[UITextField class]]) return c;
-            }
-        }
     }
-    for (UIView *sub in view.subviews) {
-        const char *nm = class_getName(object_getClass(sub));
-        if (nm && (strstr(nm, "SearchBox") || strstr(nm, "searchBox") || strstr(nm, "SearchText"))) return sub;
-    }
-    // 兜底：找到真正的输入框，取它的容器（外层胶囊）而不是输入框本身
+    // 宽搜：在所有"内含输入框"的候选里挑最里面（面积最小）的那个，
+    // 以前挑最大的会把整块外壳当成胶囊，于是又变回双层方角。
     NSMutableArray *q = [NSMutableArray arrayWithArray:view.subviews];
+    UIView *best = nil;
+    CGFloat bestArea = CGFLOAT_MAX;
     int n = 0;
-    while (q.count && n < 24) {
+    while (q.count && n < 30) {
         UIView *cur = q.firstObject;
         [q removeObjectAtIndex:0];
         n++;
+        const char *nm = class_getName(object_getClass(cur));
+        if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
         if ([cur isKindOfClass:[UITextField class]]) {
             UIView *p = cur.superview;
-            if (p && p != view && p.bounds.size.height <= 52 && p.bounds.size.width > view.bounds.size.width * 0.5) return p;
+            if (p && p != view && p.bounds.size.height <= 60) return p;
             return cur;
         }
-        // 再兜一层：那块「看得见的白底」就是胶囊 —— 够宽、高度像输入条、底色不透明
-        if (cur != view && cur.bounds.size.width >= view.bounds.size.width * 0.7 &&
-            cur.bounds.size.height >= 24 && cur.bounds.size.height <= 52) {
-            UIColor *bg = cur.backgroundColor;
-            BOOL hasInput = NO;
-            for (UIView *c in cur.subviews) {
-                if ([c isKindOfClass:[UITextField class]]) { hasInput = YES; break; }
-            }
-            if (hasInput || (bg && ![bg isEqual:[UIColor clearColor]])) return cur;
+        if (cur != view && WDHasTextFieldIn(cur, 0)) {
+            CGFloat a = cur.bounds.size.width * cur.bounds.size.height;
+            if (a > 0 && a < bestArea) { bestArea = a; best = cur; }
         }
-        if (cur.subviews.count && n < 20) [q addObjectsFromArray:cur.subviews];
+        if (cur.subviews.count && n < 24) [q addObjectsFromArray:cur.subviews];
     }
-    return nil;
+    return best;
 }
 
 // 摘掉可能残留的底板：搜索栏只要一层外观，底板 + 内层胶囊就是"双层搜索栏"
@@ -975,62 +1011,38 @@ static void WDDetachPlate(UIView *v) {
     }
 }
 
-static void WDSetSearchSpacer(UIView *bar, const char *key, CGFloat width) {
-    if (!bar || !key) return;
-    @try {
-        id sp = [bar valueForKey:[NSString stringWithUTF8String:key]];
-        if (![sp isKindOfClass:[UIView class]]) return;
-        UIView *spacer = (UIView *)sp;
-        NSLayoutConstraint *w = nil;
-        for (NSLayoutConstraint *c in spacer.constraints) {
-            if (c.firstAttribute == NSLayoutAttributeWidth && c.secondItem == nil) { w = c; break; }
-        }
-        if (w) {
-            if (fabs(w.constant - width) > 0.5) w.constant = width;
-        } else {
-            NSLayoutConstraint *nw = [spacer.widthAnchor constraintEqualToConstant:width];
-            nw.priority = UILayoutPriorityRequired - 1;
-            nw.active = YES;
-        }
-    } @catch (NSException *e) {}
-}
-
-static void WDApplySearchStackInset(UIView *bar, CGFloat inx) {
-    if (!bar) return;
-    UIStackView *root = nil;
-    @try {
-        id r = [bar valueForKey:@"rootStackView"];
-        if ([r isKindOfClass:[UIStackView class]]) root = (UIStackView *)r;
-    } @catch (NSException *e) {}
-    if (root) {
-        root.insetsLayoutMarginsFromSafeArea = NO;
-        root.layoutMarginsRelativeArrangement = YES;
-        UIEdgeInsets cur = root.layoutMargins;
-        if (fabs(cur.left - inx) > 0.5 || fabs(cur.right - inx) > 0.5) {
-            root.layoutMargins = UIEdgeInsetsMake(cur.top, inx, cur.bottom, inx);
-        }
-        return;
+// 缩进优先"把整条搜索栏收窄"，而不是去挪里面的胶囊：
+// 收窄外层后微信自己的布局会把胶囊和文字一起带上，不会出现错位，也不会被自动布局打回原形。
+static void WDSearchNarrow(UIView *bar, CGFloat inx) {
+    if (!bar || inx < 0.5) return;
+    UIView *p = bar.superview;
+    if (!p) return;
+    // 表格会强制子视图宽度，这种挪不动，交给胶囊兜底
+    if ([p isKindOfClass:[UITableView class]] ||
+        [p isKindOfClass:[UITableViewHeaderFooterView class]]) return;
+    if (p.bounds.size.width < bar.bounds.size.width + inx * 2.0 - 1.0) return;
+    CGFloat w = p.bounds.size.width;
+    CGRect want = CGRectMake(inx, bar.frame.origin.y, MAX(40, w - inx * 2.0), bar.frame.size.height);
+    if (fabs(bar.frame.origin.x - want.origin.x) < 0.5 &&
+        fabs(bar.frame.size.width - want.size.width) < 0.5) return;
+    if (!objc_getAssociatedObject(bar, kWDOrigFrameKey)) {
+        objc_setAssociatedObject(bar, kWDOrigFrameKey, [NSValue valueWithCGRect:bar.frame], WD_ASSOC);
     }
-    WDSetSearchSpacer(bar, "leftBoxSpacer", inx);
-    WDSetSearchSpacer(bar, "rightBoxSpacer", inx);
+    bar.frame = want;
 }
 
-static BOOL WDSearchIsWrapper(UIView *view) {
-    if (!view) return YES;
-    const char *nm = class_getName(object_getClass(view));
-    if (nm && (strstr(nm, "SearchPanel") || strstr(nm, "SearchBarContainer") ||
-               strstr(nm, "ContactsSearch") || strstr(nm, "NewContactsSearch"))) return YES;
-    if (view.bounds.size.height > 56) return YES;
-    return NO;
-}
-
-static void WDStyleSearchInnerOnly(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag, int depth) {
-    if (!view || depth > 5) return;
-    if (WDStyleIsSearchBarLike(view) && view.bounds.size.height <= 56) {
-        WDStyleSearch(view, inset, radius, continuous, tag);
-        return;
+// 兜底：整条挪不动时再收窄胶囊（原地收窄，不做整体平移）
+static void WDSearchNarrowBox(UIView *box, UIView *bar, CGFloat inx) {
+    if (!box || !bar || inx < 0.5) return;
+    CGFloat full = bar.bounds.size.width;
+    if (full < 40) return;
+    CGRect want = CGRectMake(inx, box.frame.origin.y, MAX(40, full - inx * 2.0), box.frame.size.height);
+    if (fabs(box.frame.origin.x - want.origin.x) < 0.5 &&
+        fabs(box.frame.size.width - want.size.width) < 0.5) return;
+    if (!objc_getAssociatedObject(box, kWDOrigFrameKey)) {
+        objc_setAssociatedObject(box, kWDOrigFrameKey, [NSValue valueWithCGRect:box.frame], WD_ASSOC);
     }
-    for (UIView *s in view.subviews) WDStyleSearchInnerOnly(s, inset, radius, continuous, tag, depth + 1);
+    box.frame = want;
 }
 
 void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
@@ -1038,16 +1050,21 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     if (WDStyleShouldSkip(view)) return;
     CGRect bounds = view.bounds;
     if (bounds.size.width < 24 || bounds.size.height < 8) return;
-    if (WDSearchIsWrapper(view)) {
-        BOOL selfIsBar = WDStyleIsSearchBarLike(view);
-        if (!selfIsBar || bounds.size.height > 56) {
-            WDStyleSearchInnerOnly(view, inset, radius, continuous, tag, 0);
-            return;
-        }
-    }
-    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
+
+    BOOL looksBar = WDStyleIsSearchBarLike(view) || WDHasTextFieldIn(view, 0);
+    // 高度不像"那一条" → 这是外壳，往下找真正的搜索条
+    if (!(looksBar && bounds.size.height <= 64.0)) {
+        UIView *bar = WDFindSearchBar(view, 0);
+        if (bar) { WDStyleSearch(bar, inset, radius, continuous, tag); return; }
+        // 整棵子树都没有输入框，说明根本不是搜索栏，不要乱刷
+        if (!WDHasTextFieldIn(view, 0) || bounds.size.height > 96.0) return;
+    }
+
+    objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
+    WDRecordStyle(view, WDKindStyleSearch, inx, radius);
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
@@ -1062,87 +1079,27 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
             ((UIView *)line).alpha = 0;
         }
     } @catch (NSException *e) {}
-    if (inx > 0.5) WDApplySearchStackInset(view, inx);
 
-    UIView *capsule = nil;
-    @try {
-        id c = [view valueForKey:@"searchBoxContainer"];
-        if ([c isKindOfClass:[UIView class]]) capsule = (UIView *)c;
-    } @catch (NSException *e) {}
-    if (!capsule) {
-        @try {
-            id box = [view valueForKey:@"searchBox"];
-            if ([box isKindOfClass:[UIView class]]) capsule = (UIView *)box;
-        } @catch (NSException *e) {}
-    }
-    if (!capsule) capsule = WDSearchInnerBox(view);
+    UIView *capsule = WDSearchInnerBox(view);
     if (capsule && capsule != view) {
-        // 只有一层：搜索栏本体透明，圆角与缩进都给内部输入框（外层再挂底板就会变"双层搜索栏"）
+        // 只留一层：搜索栏本体透明，圆角给胶囊。再挂底板就成了"双层搜索栏"
         WDDetachPlate(view);
-        if (inx > 0.5) {
-            UIView *p = capsule.superview ?: view;
-            CGFloat full = p.bounds.size.width;
-            // 自动布局那套（stack/spacer）没生效时才直接改 frame
-            if (full > 40 && capsule.bounds.size.width > full - inx * 1.2) {
-                if (!objc_getAssociatedObject(capsule, kWDOrigFrameKey)) {
-                    objc_setAssociatedObject(capsule, kWDOrigFrameKey,
-                                             [NSValue valueWithCGRect:capsule.frame], WD_ASSOC);
-                }
-                CGFloat h = capsule.frame.size.height;
-                CGFloat y = capsule.frame.origin.y;
-                CGRect want = CGRectMake(inx, y, MAX(40, full - inx * 2.0), h);
-                if (fabs(capsule.frame.origin.x - want.origin.x) > 0.5 ||
-                    fabs(capsule.frame.size.width - want.size.width) > 0.5) {
-                    capsule.frame = want;
-                }
-            }
-        }
-        CGFloat br = MIN(radius, capsule.bounds.size.height > 1 ? capsule.bounds.size.height / 2.0 : radius);
-        WDStyleRound(capsule, br, continuous, tag);
+        CGFloat w0 = capsule.frame.size.width;
+        WDSearchNarrow(view, inx);
+        if (fabs(capsule.frame.size.width - w0) < 0.5) WDSearchNarrowBox(capsule, view, inx);
+        CGFloat ch = capsule.bounds.size.height;
+        WDStyleRound(capsule, MIN(radius, ch > 1 ? ch / 2.0 : radius), continuous, tag);
         if (gColMaster && gInOn) {
             UIColor *inC = WDResolvedIn();
             if (inC) capsule.backgroundColor = inC;
-        }
-        if (gColMaster && gInOn) {
-            @try { [view setValue:WDResolvedIn() forKey:@"searchBoxContainerColor"]; } @catch (NSException *e) {}
+            @try { [view setValue:inC forKey:@"searchBoxContainerColor"]; } @catch (NSException *e) {}
         }
         return;
     }
-    if (![view isKindOfClass:[UISearchBar class]]) {
-        if (!WDStyleIsSearchBarLike(view)) {
-            for (UIView *s in view.subviews) {
-                if (WDStyleIsSearchBarLike(s)) {
-                    WDStyleSearch(s, inset, radius, continuous, tag);
-                    return;
-                }
-            }
-        }
-    }
-    if ([view isKindOfClass:[UISearchBar class]]) {
-        UIView *tf = WDSearchInnerBox(view);
-        if (tf && tf != view) {
-            // 同样只保留一层：圆角 + 缩进都落在输入框上，不再额外挂底板
-            WDDetachPlate(view);
-            if (inx > 0.5) {
-                if (!objc_getAssociatedObject(tf, kWDOrigFrameKey)) {
-                    objc_setAssociatedObject(tf, kWDOrigFrameKey, [NSValue valueWithCGRect:tf.frame], WD_ASSOC);
-                }
-                CGRect want = CGRectMake(inx, tf.frame.origin.y,
-                                         MAX(40, bounds.size.width - inx * 2.0), tf.frame.size.height);
-                if (fabs(tf.frame.origin.x - want.origin.x) > 0.5 ||
-                    fabs(tf.frame.size.width - want.size.width) > 0.5) {
-                    tf.frame = want;
-                }
-            }
-            CGFloat br = MIN(radius, tf.bounds.size.height > 1 ? tf.bounds.size.height / 2.0 : radius);
-            WDStyleRound(tf, br, continuous, tag);
-            return;
-        }
-        if (inx > 0.5) WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
-        return;
-    }
-    if (inx > 0.5) WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
-    else WDStyleRound(view, MIN(radius, view.bounds.size.height / 2.0), continuous, tag);
+    // 没有内层：它自己就是那一条，收窄后补一张圆角卡
+    WDSearchNarrow(view, inx);
+    WDPlacePlate(view, view.bounds, 0, radius, 15, NO, NO, NO);
+    WDStyleRound(view, MIN(radius, view.bounds.size.height / 2.0), continuous, tag);
 }
 
 static void WDClearFillsDeep(UIView *v, int depth) {
@@ -1252,6 +1209,7 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
+    WDRecordStyle(view, WDKindStyleProfile, inx, radius);
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
@@ -1472,6 +1430,7 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
 
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
+    WDRecordStyle(cell, WDKindStyleCell, inx, radius);
     if (!tv) {
         UIView *sv = cell.superview;
         while (sv && ![sv isKindOfClass:[UITableView class]]) sv = sv.superview;
@@ -1617,10 +1576,6 @@ void WDStyleRevertView(UIView *view) {
             objc_setAssociatedObject(cell, kWDOrigBgColorKey, nil, WD_ASSOC);
         }
         objc_setAssociatedObject(cell, kWDOrigBgKey, nil, WD_ASSOC);
-        if ([objc_getAssociatedObject(cell, kWDInsetKey) boolValue]) {
-            cell.contentView.frame = UIEdgeInsetsInsetRect(cell.bounds, UIEdgeInsetsZero);
-            objc_setAssociatedObject(cell, kWDInsetKey, nil, WD_ASSOC);
-        }
         // 还原内容容器内缩与隐藏掉的箭头
         WDFrameInset(cell.contentView ?: cell, 0);
         UIView *it = WDCellItemView(cell);
@@ -1653,11 +1608,6 @@ void WDStyleRevertView(UIView *view) {
         }
         UIView *box = WDSearchInnerBox(view);
         if (box) {
-            NSValue *sf = objc_getAssociatedObject(box, kWDSearchBoxFrameKey);
-            if (sf) {
-                box.frame = [sf CGRectValue];
-                objc_setAssociatedObject(box, kWDSearchBoxFrameKey, nil, WD_ASSOC);
-            }
             NSValue *bf = objc_getAssociatedObject(box, kWDOrigFrameKey);
             if (bf) {
                 box.frame = [bf CGRectValue];
@@ -1684,6 +1634,57 @@ void WDStyleRevertView(UIView *view) {
     }
     WDRevertRound(view);
     objc_setAssociatedObject(view, kWDTagKey, nil, WD_ASSOC);
+}
+
+#pragma mark - 重贴（系统重新布局后把样式贴回去）
+
+static BOOL WDRelayoutBusy(UIView *v) {
+    return [objc_getAssociatedObject(v, kWDStyleBusyKey) boolValue];
+}
+
+// 卡片行：只重贴底板与内容内缩，不走完整流程（列表滚动时 layoutSubviews 很频繁）
+void WDStyleCellRelayout(UITableViewCell *cell) {
+    if (!cell) return;
+    if (WDRelayoutBusy(cell)) return;
+    NSNumber *n = objc_getAssociatedObject(cell, kWDStyleInsetKey);
+    if (!n || WDStyleTagOf(cell) < 0) return;
+    if ([objc_getAssociatedObject(cell, kWDStyleKindKey) intValue] != WDKindStyleCell) return;
+    objc_setAssociatedObject(cell, kWDStyleBusyKey, @YES, WD_ASSOC);
+    @try {
+        CGRect b = cell.bounds;
+        if (b.size.width >= 32 && b.size.height >= 8) {
+            CGFloat inx = [n doubleValue];
+            CGFloat rad = [(NSNumber *)objc_getAssociatedObject(cell, kWDStyleRadiusKey) doubleValue];
+            NSUInteger corners = WDSectionCorners(cell);
+            BOOL showSep = (corners == 0) ||
+                           ((corners & (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner)) == 0);
+            WDPlacePlate(cell, b, inx, rad, corners, showSep, YES, NO);
+            WDBalanceInner(cell, inx);
+        }
+    } @catch (NSException *e) {}
+    objc_setAssociatedObject(cell, kWDStyleBusyKey, nil, WD_ASSOC);
+}
+
+// 搜索栏 / 资料卡等：系统布局把它们打回原形后原样重贴
+void WDStyleRelayoutView(UIView *v) {
+    if (!v) return;
+    if (WDRelayoutBusy(v)) return;
+    NSNumber *k = objc_getAssociatedObject(v, kWDStyleKindKey);
+    if (!k) return;
+    int tag = WDStyleTagOf(v);
+    if (tag < 0) return;
+    CGFloat inx = [(NSNumber *)objc_getAssociatedObject(v, kWDStyleInsetKey) doubleValue];
+    CGFloat rad = [(NSNumber *)objc_getAssociatedObject(v, kWDStyleRadiusKey) doubleValue];
+    objc_setAssociatedObject(v, kWDStyleBusyKey, @YES, WD_ASSOC);
+    @try {
+        switch ([k intValue]) {
+            case WDKindStyleSearch:  WDStyleSearch(v, inx, rad, gStyleCont, tag); break;
+            case WDKindStyleProfile: WDStyleProfile(v, inx, rad, gStyleCont, tag); break;
+            case WDKindStyleView:    WDStyleView(v, inx, rad, gStyleCont, tag); break;
+            default: break;
+        }
+    } @catch (NSException *e) {}
+    objc_setAssociatedObject(v, kWDStyleBusyKey, nil, WD_ASSOC);
 }
 
 #pragma mark - 页面尾部留白透明（新的朋友等）

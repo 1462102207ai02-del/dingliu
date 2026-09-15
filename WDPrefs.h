@@ -29,7 +29,6 @@ NSString *WDHexForColor(UIColor *c);
 - (void)resetAll;
 - (NSDictionary *)exportDictionary;
 - (BOOL)importDictionary:(NSDictionary *)dict;
-- (void)reload;
 - (void)ping;
 
 - (BOOL)bgEnabled;

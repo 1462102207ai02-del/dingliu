@@ -138,17 +138,6 @@ NSString *WDPageTitle(int page) {
     }
 }
 
-// 四个 Tab 页（微信 / 通讯录 / 发现 / 我）的短标题
-NSString *WDTabTitle(int page) {
-    switch (page) {
-        case WDPageHome:     return @"微信";
-        case WDPageContacts: return @"通讯录";
-        case WDPageDiscover: return @"发现";
-        case WDPageMe:       return @"我";
-        default:             return @"其他";
-    }
-}
-
 NSArray<NSNumber *> *WDCatalogIndexesForPage(int page) {
     NSMutableArray *a = [NSMutableArray array];
     int n = WDCatalogCount();
@@ -158,11 +147,3 @@ NSArray<NSNumber *> *WDCatalogIndexesForPage(int page) {
     return a;
 }
 
-NSArray<NSNumber *> *WDCatalogIndexesForGroup(int group) {
-    NSMutableArray *a = [NSMutableArray array];
-    int n = WDCatalogCount();
-    for (int i = 0; i < n; i++) {
-        if (kItems[i].group == group) [a addObject:@(i)];
-    }
-    return a;
-}
