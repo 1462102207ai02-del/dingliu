@@ -49,7 +49,7 @@ void WDDiagLog(NSString *fmt, ...) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         fmt2 = [[NSDateFormatter alloc] init];
-        fmt2.dateFormat = "HH:mm:ss.SSS";
+        fmt2.dateFormat = @"HH:mm:ss.SSS";
     });
     NSString *line = [NSString stringWithFormat:@"%@ %@", [fmt2 stringFromDate:[NSDate date]], body];
     [gDiagLock lock];
