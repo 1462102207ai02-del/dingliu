@@ -1012,7 +1012,9 @@ static UIView *WDSearchInnerBox(UIView *view) {
         n++;
         const char *nm = class_getName(object_getClass(cur));
         if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
-        if ([cur isKindOfClass:[UITextField class]]) return WDCapsuleAroundField(cur, view);
+        if ([cur isKindOfClass:[UITextField class]]) {
+            return WDCapsuleAroundField((UITextField *)cur, view);
+        }
         if (cur != view && WDHasTextFieldIn(cur, 0)) {
             CGFloat h = cur.bounds.size.height;
             CGFloat score = (h > 0 && h <= 48 ? h : 1000 + h);
