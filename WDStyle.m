@@ -1168,6 +1168,22 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
     WDRecordStyle(view, WDKindStyleSearch, inx, radius);
     WDRequestRelayoutHook(object_getClass(view));
+
+    // ★ 胶囊还没布局（h<20，首帧常见）时一步都不动：
+    //   这里任何清理/上色都会把搜索栏留成一条全宽白带，而它之后可能
+    //   再也不走 layout，就永远停在那个状态。样式已记录（上面），
+    //   布局后由重贴钩子原样重跑 WDStyleSearch，那时胶囊高度是真实的。
+    {
+        UIView *c0 = WDSearchInnerBox(view);
+        if (c0 && c0 != view && c0.bounds.size.height < 20.0) {
+            WDDiagLogOnce([@"searchnotready" stringByAppendingString:NSStringFromClass([view class])],
+                          @"[search] %@ 胶囊 %@ 未布局 h=%.0f → 本轮不动，布局后重刷",
+                          NSStringFromClass([view class]), NSStringFromClass([c0 class]),
+                          c0.bounds.size.height);
+            return;
+        }
+    }
+
     NSMutableArray *sink = objc_getAssociatedObject(view, kWDClearedViewsKey);
     if (![sink isKindOfClass:[NSMutableArray class]]) sink = [NSMutableArray array];
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
@@ -1226,11 +1242,16 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         // 全圆（半径=高/2）只对真正的输入条用；再高的容器全圆就变成巨型胶囊了
         CGFloat br = (ch > 0 && ch <= 48) ? MIN(radius, ch / 2.0) : MIN(radius, 18.0);
         WDStyleRound(capsule, br, continuous, tag);
-        if (gColMaster && gInOn) {
-            UIColor *inC = WDResolvedIn();
-            if (inC) capsule.backgroundColor = inC;
-            @try { [view setValue:inC forKey:@"searchBoxContainerColor"]; } @catch (NSException *e) {}
+        // 胶囊用系统搜索框灰，不用卡片内色 —— 首页/通讯录的搜索栏外壳是白的，
+        // 白胶囊贴白底 = 隐形，整条看起来就是一条没样式的白带
+        UIColor *capC;
+        if (@available(iOS 13.0, *)) {
+            capC = [UIColor tertiarySystemFillColor];
+        } else {
+            capC = [UIColor colorWithWhite:0.93 alpha:1.0];
         }
+        capsule.backgroundColor = capC;
+        @try { [view setValue:capC forKey:@"searchBoxContainerColor"]; } @catch (NSException *e) {}
         // 胶囊外面如果还套着画了底的容器（60~70pt 高的白条），一并清掉，
         // 否则就是截图里那种"巨型白色胶囊"
         WDClearMiddleLayers(view, capsule, sink);
@@ -1839,6 +1860,34 @@ static BOOL WDRelayoutBusy(UIView *v) {
     return [objc_getAssociatedObject(v, kWDStyleBusyKey) boolValue];
 }
 
+// 侧滑操作条：微信把操作按钮原生存到 cell 右缘（= 屏幕边），
+// 卡片内缩后按钮会冲出卡片右边界。样式时把这类「几乎全高、宽≥60、
+// 横在右缘」的子条右缘收到卡片边（静止时它藏在内容下面，挪了也看不见）。
+static void WDClampSwipeStrips(UIView *cell, CGFloat inx) {
+    if (!cell || inx < 1) return;
+    CGFloat w = cell.bounds.size.width, h = cell.bounds.size.height;
+    if (w < 100 || h < 30) return;
+    NSArray *scopes = [cell.subviews arrayByAddingObjectsFromArray:cell.contentView.subviews];
+    for (UIView *s in scopes) {
+        if (s.hidden) continue;
+        if (s.superview != cell && s.superview != cell.contentView) continue;
+        const char *nm = class_getName(object_getClass(s));
+        if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
+        CGRect f = s.frame;
+        if (f.size.height < h - 10 || f.size.width < 60) continue;
+        if (f.origin.x <= 4) continue;              // 内容容器 origin.x=0，跳过
+        CGFloat maxX = f.origin.x + f.size.width;
+        if (maxX <= w - inx + 0.5) continue;
+        CGFloat oldX = f.origin.x;
+        f.origin.x -= (maxX - (w - inx));
+        s.frame = f;
+        WDDiagLogOnce([@"swipe" stringByAppendingString:NSStringFromClass([s class])],
+                      @"[swipe] %@ (cell=%@) 操作条右缘 %.0f → %.0f",
+                      NSStringFromClass([s class]), NSStringFromClass([cell class]),
+                      oldX + f.size.width, f.origin.x + f.size.width);
+    }
+}
+
 // 卡片行：只重贴底板与内容内缩，不走完整流程（列表滚动时 layoutSubviews 很频繁）
 void WDStyleCellRelayout(UITableViewCell *cell) {
     if (!cell) return;
@@ -1860,6 +1909,7 @@ void WDStyleCellRelayout(UITableViewCell *cell) {
             CGFloat vgap = moments ? WD_MOMENTS_VGAP : 0;
             WDPlacePlate(cell, b, inx, rad, corners, showSep, YES, NO, vgap);
             WDBalanceInner(cell, inx);
+            WDClampSwipeStrips(cell, inx);
         }
     } @catch (NSException *e) {}
     objc_setAssociatedObject(cell, kWDStyleBusyKey, nil, WD_ASSOC);

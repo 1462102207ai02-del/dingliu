@@ -167,6 +167,39 @@ static int WDIdxForClass(Class c) {
 
 #pragma mark - 快照
 
+static BOOL WDHookDidLayout(const char *clsName, int kind);
+
+// 运行时从窗口根视图找 UITabBarController，把每个 tab 子页都挂上 kind=3。
+// 类名硬编码（NewMainFrameViewController 等）在部分微信版本上挂不上 ——
+// 诊断日志里主 tab 的 [didLayout] 一条都没出现，就是这个原因。
+static void WDDiscoverTabChildren(void) {
+    UIWindow *kw = nil;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (w.isKeyWindow && w.rootViewController) { kw = w; break; }
+    }
+    if (!kw) return;
+    NSMutableArray *q = [NSMutableArray arrayWithObject:kw.rootViewController];
+    int n = 0;
+    UITabBarController *tab = nil;
+    while (q.count && n < 40 && !tab) {
+        UIViewController *vc = q.firstObject;
+        [q removeObjectAtIndex:0];
+        n++;
+        if ([vc isKindOfClass:[UITabBarController class]]) { tab = (UITabBarController *)vc; break; }
+        if (vc.presentedViewController) [q addObject:vc.presentedViewController];
+        if (vc.childViewControllers.count) [q addObjectsFromArray:vc.childViewControllers];
+    }
+    if (!tab || tab.viewControllers.count == 0) return;
+    for (UIViewController *vc in tab.viewControllers) {
+        NSString *nm = NSStringFromClass([vc class]);
+        if (![nm isKindOfClass:[NSString class]] || nm.length == 0) continue;
+        WDDiagLogOnce([@"tab" stringByAppendingString:nm],
+                      @"[tab] 运行时发现 tab 页: %@ (index=%lu)",
+                      nm, (unsigned long)[tab.viewControllers indexOfObject:vc]);
+        WDHookDidLayout(nm.UTF8String, 3);
+    }
+}
+
 static void WDSnapshot(void) {
     WDPrefs *p = [WDPrefs shared];
     gMaster = p.master;
@@ -201,6 +234,7 @@ static void WDSnapshot(void) {
     if (inD.length) snprintf(gCardInHex[1], 16, "%s", inD.UTF8String);
     WDStyleSyncColors(gMaster, gCardInOn != 0, gCardInHex[0], gCardInHex[1],
                       on != 0, gPageHex[0][0], gPageHex[0][1]);
+    if ([NSThread isMainThread]) WDDiscoverTabChildren();
 }
 
 static BOOL WDNameHas(const char *nm, const char *needle) {
