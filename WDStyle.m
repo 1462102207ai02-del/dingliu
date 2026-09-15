@@ -3,6 +3,8 @@
 #import <string.h>
 #import <stdio.h>
 
+#define WD_ASSOC OBJC_ASSOCIATION_RETAIN_NONATOMIC
+
 static const void *kWDPlateKey       = &kWDPlateKey;
 static const void *kWDTagKey         = &kWDTagKey;
 static const void *kWDOrigRadiusKey  = &kWDOrigRadiusKey;
@@ -69,8 +71,6 @@ static UIColor *WDHexC(const char *s) {
     if (!s || !s[0]) return nil;
     return WDColorForHex([NSString stringWithUTF8String:s]);
 }
-
-#define WD_ASSOC OBJC_ASSOCIATION_RETAIN_NONATOMIC
 
 @interface WDCardPlate : UIView
 @property (nonatomic, strong) CAShapeLayer *fill;

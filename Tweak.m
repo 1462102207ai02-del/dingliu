@@ -262,6 +262,7 @@ static BOOL WDIsPluginStorage(UIViewController *vc) {
 
 static void WDStyleSearchTree(UIView *v);
 static BOOL WDHeaderOn(void);
+static void WDEnsureRelayoutHook(Class cls);
 
 static BOOL WDIsChatController(UIViewController *vc) {
     if (!vc) return NO;
