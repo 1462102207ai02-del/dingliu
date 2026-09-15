@@ -664,8 +664,13 @@ static void WDPaintTree(UIViewController *vc, UIColor *want) {
         }
         return;
     }
+    // 朋友圈详情/评论页：导航要清透明（封面图要顶到状态栏下面），
+    // 页面底色照常刷 —— 刷成页面色会盖住封面图
+    const char *pvcn = class_getName(object_getClass(vc));
+    BOOL snsDetail = pvcn && (strstr(pvcn, "SNSDetail") || strstr(pvcn, "SNSComment") ||
+                              strstr(pvcn, "SNSUserCenter") || strstr(pvcn, "SNSTimeLine"));
     WDPaintView(vc.view, want);
-    WDPaintNavChrome(vc, want);
+    WDPaintNavChrome(vc, snsDetail ? nil : want);
     for (UIView *s in vc.view.subviews) {
         const char *nm = class_getName(object_getClass(s));
         if (nm && (strstr(nm, "RightTopMenu") || strstr(nm, "BarItemCustom") ||
@@ -1550,11 +1555,20 @@ static void WDInstallTableDisplay(void) {
     WDHookDidLayout("ContactsViewController", 3);
     WDHookDidLayout("FindFriendEntryViewController", 3);
     WDHookDidLayout("MoreViewController", 3);
+    // 服务/钱包 与 朋友圈详情：这些页要靠全量扫才能做底色/导航/评论卡，
+    // 没钩住就整页原生态（截图里导航白条、评论方角带线就是没钩上）
+    WDHookDidLayout("WCPayMainViewController", 3);
+    WDHookDidLayout("WAPayMainViewController", 3);
+    WDHookDidLayout("SNSDetailViewController", 3);
+    WDHookDidLayout("SNSCommentViewController", 3);
+    WDHookDidLayout("SNSUserCenterViewController", 3);
     WDHookTabWillAppear("NewMainFrameViewController");
     WDHookTabWillAppear("ContactsViewController");
     WDHookTabWillAppear("FindFriendEntryViewController");
     WDHookTabWillAppear("MoreViewController");
     WDHookTabWillAppear("NewSettingViewController");
+    WDHookTabDidAppear("MoreViewController");
+    WDHookTabDidAppear("NewSettingViewController");
     WDHookSearchBarClass("WCSearchBar");
     WDHookSearchBarClass("MMUISearchBar");
     WDHookSearchBarClass("FavSearchBar");
@@ -1687,6 +1701,49 @@ static BOOL WDHookTabWillAppear(const char *clsName) {
         ok = class_addMethod(cls, s, stub, enc);
     }
     if (ok && hookedN < 32) hooked[hookedN++] = cls;
+    return ok;
+}
+
+// viewDidAppear 保险：微信重建「我」页表头/资料卡常发生在 appear 之后，
+// 这时强推一次布局让 didLayout 钩子（kind=2）重跑，资料卡就不会
+// 在重进/切板块后停留在原生态
+static BOOL WDHookTabDidAppear(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(viewDidAppear:);
+    Method m = class_getInstanceMethod(cls, s);
+    static Class hooked[16];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf, BOOL animated) {
+        if (orig) ((void (*)(id, SEL, BOOL))orig)(slf, s, animated);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { WDPageBgApply(); } @catch (NSException *e) {}
+        if ([slf isKindOfClass:[UIViewController class]]) {
+            UIViewController *vc = (UIViewController *)slf;
+            const char *cn = class_getName([slf class]);
+            if (cn && (strstr(cn, "MoreViewController") || strstr(cn, "NewSettingViewController"))) {
+                int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+                if (pidx >= 0 && pidx < 160 && gSnap[pidx].on && vc.isViewLoaded && vc.view) {
+                    WDNoAnim(^{ @try {
+                        [vc.view setNeedsLayout];
+                        [vc.view layoutIfNeeded];
+                        WDStyleMePage(vc, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
+                    } @catch (NSException *e) {} });
+                }
+            }
+        }
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:B";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 16) hooked[hookedN++] = cls;
     return ok;
 }
 
@@ -1825,6 +1882,22 @@ static void WDDecorateVisible(void) {
                 UITableView *tv = (UITableView *)v;
                 tv.separatorColor = [UIColor clearColor];
                 tv.separatorStyle = UITableViewCellSeparatorStyleNone;
+                // 朋友圈详情/评论页：评论 cell 不在目录里，这里整表兜底卡化 + 去线
+                UIViewController *tvOwn = WDOwnerVC(tv);
+                const char *tvOn = tvOwn ? class_getName([tvOwn class]) : NULL;
+                if (tvOn && (strstr(tvOn, "SNSDetail") || strstr(tvOn, "SNSComment"))) {
+                    static int gSNSIdx = -2;
+                    if (gSNSIdx == -2) gSNSIdx = WDIndexOfClassName("WCListFeedCellView");
+                    if (gSNSIdx >= 0 && gSNSIdx < 160 && gSnap[gSNSIdx].on) {
+                        for (UITableViewCell *c in tv.visibleCells) {
+                            @try {
+                                WDStyleCellAt(c, tv, nil, gSnap[gSNSIdx].i, gSnap[gSNSIdx].r,
+                                              gContinuous, gSNSIdx);
+                                WDStyleHideLines(c);
+                            } @catch (NSException *e) {}
+                        }
+                    }
+                }
                 for (UITableViewCell *c in tv.visibleCells) {
                     @try { WDDecorateCellIfNeeded(c); } @catch (NSException *e) {}
                 }
@@ -1855,7 +1928,9 @@ static void WDDecorateVisible(void) {
             } else if ([v isKindOfClass:[UICollectionView class]]) {
                 UIViewController *own = WDOwnerVC(v);
                 const char *on = own ? class_getName([own class]) : NULL;
-                if (on && strstr(on, "WCPayMainViewController")) {
+                // 服务/钱包页的网格：整块收纳成一张卡，不要逐按钮单独圆角
+                if (on && (strstr(on, "WCPay") || strstr(on, "PayMain") ||
+                           strstr(on, "ServiceMain") || strstr(on, "WechatService"))) {
                     int pay = WDIndexOfClassName("WCPayWalletEntryHeaderView");
                     if (pay < 0) pay = WDIndexOfClassName("NewMainFrameCell");
                     if (pay >= 0 && pay < 160 && gSnap[pay].on) @try { WDStyleHostCard(v, gSnap[pay].i, gSnap[pay].r, gContinuous, pay); } @catch (NSException *e) {}

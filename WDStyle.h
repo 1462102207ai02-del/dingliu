@@ -27,6 +27,7 @@ void WDStyleSetRelayoutHook(void (*fn)(Class cls));
 void WDStyleCellRelayout(UITableViewCell *cell);
 void WDStyleRelayoutView(UIView *view);
 BOOL WDStyleIsMomentsCell(UITableViewCell *cell);
+void WDStyleHideLines(UIView *view);
 
 int  WDStyleTagOf(UIView *view);
 void WDStyleRevertView(UIView *view);

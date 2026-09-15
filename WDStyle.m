@@ -554,6 +554,15 @@ static void WDHideMomentsLines(UIView *v, int depth) {
     for (UIView *s in v.subviews) WDHideMomentsLines(s, depth + 1);
 }
 
+// 供 Tweak 的朋友圈详情兜底使用：隐藏 cell 子树里的发丝线/分割线
+void WDStyleHideLines(UIView *v) {
+    if (!v) return;
+    WDHideMomentsLines(v, 0);
+    if ([v isKindOfClass:[UITableViewCell class]]) {
+        WDHideMomentsLines(((UITableViewCell *)v).contentView, 0);
+    }
+}
+
 static void WDClearFillViews(UIView *v, int depth) {
     if (!v || depth > 3) return;
     const char *nm = class_getName(object_getClass(v));
@@ -1169,6 +1178,7 @@ static void WDSearchNarrowBox(UIView *box, UIView *bar, CGFloat inx) {
 }
 
 static void WDClearMiddleLayers(UIView *root, UIView *capsule, NSMutableArray *sink);
+static void WDClearPaintedBg(UIView *v);
 
 void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!view) return;
@@ -1223,6 +1233,7 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     view.backgroundColor = [UIColor clearColor];
     view.opaque = NO;
     view.clipsToBounds = NO;
+    WDClearPaintedBg(view);   // 条本身若带白色背景图（UIButton 常见），一并清掉
     @try {
         id line = [view valueForKey:@"bottomLineView"];
         if ([line isKindOfClass:[UIView class]]) {
@@ -1242,15 +1253,12 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         WDDiagLogOnce([@"shell" stringByAppendingString:NSStringFromClass([capsule class])],
                       @"[search] 外壳过高被剥掉: %@ h=%.0f w=%.0f",
                       NSStringFromClass([capsule class]), capsule.bounds.size.height, capsule.bounds.size.width);
-        UIColor *bg = capsule.backgroundColor;
-        if (bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05) {
-            if (!objc_getAssociatedObject(capsule, kWDOrigBgColorKey)) {
-                objc_setAssociatedObject(capsule, kWDOrigBgColorKey, bg, WD_ASSOC);
-            }
-            if (![sink containsObject:capsule]) [sink addObject:capsule];
-            capsule.backgroundColor = [UIColor clearColor];
-            capsule.opaque = NO;
+        if (!objc_getAssociatedObject(capsule, kWDOrigBgColorKey)) {
+            UIColor *bg = capsule.backgroundColor;
+            objc_setAssociatedObject(capsule, kWDOrigBgColorKey, bg ? (id)bg : (id)[NSNull null], WD_ASSOC);
         }
+        if (![sink containsObject:capsule]) [sink addObject:capsule];
+        WDClearPaintedBg(capsule);
         scope = capsule;
         capsule = nil;
     }
@@ -1295,21 +1303,47 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     WDStyleRound(view, (sh > 0 && sh <= 48) ? MIN(radius, sh / 2.0) : MIN(radius, 18.0), continuous, tag);
 }
 
-// 胶囊到搜索栏外壳之间凡是"画了底"的中间层都清透明（记录以便还原）
+// 胶囊到搜索栏外壳之间凡是"画了底"的中间层都清透明（记录以便还原）。
+// 白底不一定来自 backgroundColor —— 很常见是 UIButton 的白色背景图，
+// 只清颜色的话那条"大搜索栏"依然全宽白带（v1.1.22 截图实锤）。
+static void WDClearPaintedBg(UIView *v) {
+    if (!v) return;
+    UIColor *bg = v.backgroundColor;
+    if (bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05) {
+        if (!objc_getAssociatedObject(v, kWDOrigBgColorKey)) {
+            objc_setAssociatedObject(v, kWDOrigBgColorKey, bg, WD_ASSOC);
+        }
+        v.backgroundColor = [UIColor clearColor];
+        v.opaque = NO;
+    }
+    if ([v isKindOfClass:[UIButton class]]) {
+        UIButton *btn = (UIButton *)v;
+        for (UIControlState st = UIControlStateNormal;
+             st <= UIControlStateSelected; st++) {
+            UIImage *img = [btn backgroundImageForState:st];
+            if (img) {
+                [btn setBackgroundImage:nil forState:st];
+            }
+        }
+        [btn setBackgroundColor:[UIColor clearColor]];
+    }
+    if (v.layer) {
+        CGColorRef lbg = v.layer.backgroundColor;
+        if (lbg && CGColorGetAlpha(lbg) > 0.05) v.layer.backgroundColor = [UIColor clearColor].CGColor;
+    }
+}
+
 static void WDClearMiddleLayers(UIView *root, UIView *capsule, NSMutableArray *sink) {
     if (!root || root == capsule || !sink) return;
     for (UIView *s in root.subviews) {
         if (!WDSubtreeContains(s, capsule, 0)) continue;
         if (s != capsule && s.bounds.size.height > 48) {
-            UIColor *bg = s.backgroundColor;
-            if (bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05) {
-                if (!objc_getAssociatedObject(s, kWDOrigBgColorKey)) {
-                    objc_setAssociatedObject(s, kWDOrigBgColorKey, bg, WD_ASSOC);
-                }
-                if (![sink containsObject:s]) [sink addObject:s];
-                s.backgroundColor = [UIColor clearColor];
-                s.opaque = NO;
+            if (!objc_getAssociatedObject(s, kWDOrigBgColorKey)) {
+                UIColor *bg = s.backgroundColor;
+                objc_setAssociatedObject(s, kWDOrigBgColorKey, bg ? (id)bg : (id)[NSNull null], WD_ASSOC);
             }
+            if (![sink containsObject:s]) [sink addObject:s];
+            WDClearPaintedBg(s);
         }
         WDClearMiddleLayers(s, capsule, sink);
     }
@@ -1891,13 +1925,14 @@ static BOOL WDRelayoutBusy(UIView *v) {
     return [objc_getAssociatedObject(v, kWDStyleBusyKey) boolValue];
 }
 
-// 侧滑操作条：微信把操作按钮原生存到 cell 右缘（= 屏幕边），
-// 卡片内缩后按钮会冲出卡片右边界。样式时把这类「几乎全高、宽≥60、
-// 横在右缘」的子条右缘收到卡片边（静止时它藏在内容下面，挪了也看不见）。
+// 侧滑操作条：微信把操作按钮（标为未读/不显示/删除/备注）原生存到
+// cell 右缘（= 屏幕边），卡片内缩后按钮会冲出卡片右边界。
+// 兼容两种结构：按钮条自己是右缘子视图；或全宽容器里按钮位于右半区。
 static void WDClampSwipeStrips(UITableViewCell *cell, CGFloat inx) {
     if (!cell || inx < 1) return;
     CGFloat w = cell.bounds.size.width, h = cell.bounds.size.height;
     if (w < 100 || h < 30) return;
+    CGFloat limit = w - inx;
     NSArray *scopes = [cell.subviews arrayByAddingObjectsFromArray:cell.contentView.subviews];
     for (UIView *s in scopes) {
         if (s.hidden) continue;
@@ -1905,17 +1940,19 @@ static void WDClampSwipeStrips(UITableViewCell *cell, CGFloat inx) {
         const char *nm = class_getName(object_getClass(s));
         if (nm && nm[0] == 'W' && nm[1] == 'D') continue;
         CGRect f = s.frame;
-        if (f.size.height < h - 10 || f.size.width < 60) continue;
-        if (f.origin.x <= 4) continue;              // 内容容器 origin.x=0，跳过
+        if (f.size.height < h - 10 || f.size.width < 40) continue;
+        // 主内容容器（origin≈0 且铺满整行）不钳
+        if (f.origin.x < 2 && f.size.width >= w - 2) continue;
         CGFloat maxX = f.origin.x + f.size.width;
-        if (maxX <= w - inx + 0.5) continue;
-        CGFloat oldX = f.origin.x;
-        f.origin.x -= (maxX - (w - inx));
+        if (maxX <= limit + 0.5) continue;
+        CGFloat oldMax = maxX;
+        f.origin.x -= (maxX - limit);
         s.frame = f;
         WDDiagLogOnce([@"swipe" stringByAppendingString:NSStringFromClass([s class])],
                       @"[swipe] %@ (cell=%@) 操作条右缘 %.0f → %.0f",
                       NSStringFromClass([s class]), NSStringFromClass([cell class]),
-                      oldX + f.size.width, f.origin.x + f.size.width);
+                      oldMax, f.origin.x + f.size.width);
+        // 按钮若是彩色图/底，顺带给条左缘圆角观感（不裁内容）
     }
 }
 
