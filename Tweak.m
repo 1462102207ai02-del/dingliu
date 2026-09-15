@@ -167,6 +167,8 @@ static int WDIdxForClass(Class c) {
 
 #pragma mark - 快照
 
+static CGFloat gUniversalR = 14.0;   // 类名直圆层用的半径（跟随全局圆角）
+
 static BOOL WDHookDidLayout(const char *clsName, int kind);
 static BOOL WDHookTabDidAppear(const char *clsName);
 static void WDPageBgApply(void);
@@ -276,6 +278,7 @@ static void WDSnapshot(void) {
     NSString *inD = [p cardInHexDark:YES];
     if (inL.length) snprintf(gCardInHex[0], 16, "%s", inL.UTF8String);
     if (inD.length) snprintf(gCardInHex[1], 16, "%s", inD.UTF8String);
+    gUniversalR = (p.globalRadius > 0 ? p.globalRadius : 14.0);
     WDStyleSyncColors(gMaster, gCardInOn != 0, gCardInHex[0], gCardInHex[1],
                       on != 0, gPageHex[0][0], gPageHex[0][1]);
     if ([NSThread isMainThread]) WDDiscoverTabChildren();
@@ -1956,9 +1959,90 @@ static void WDDecorateVisible(void) {
                 } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "FavSearchBar"))) {
                     @try { WDStyleSearchTree(v); } @catch (NSException *e) {}
                 }
+                // 类名直圆兜底：目录没盖到的 MM*/WC* 视图也保底连续圆角
+                @try { WDUniversalApply(v); } @catch (NSException *e) {}
             }
             if (v.subviews.count) [q addObjectsFromArray:v.subviews];
         }
+    }
+}
+
+#pragma mark - 类名直圆层（兜底）
+
+// 核实类名来自 微信圆角.dylib 的逆向报告：对方插件就是按这份清单
+// 对 MM* 视图类直接 setCornerRadius(+连续曲率)，覆盖面大且稳定。
+// 我们把它移植成兜底层：凡是没被目录样式化（无 tag）、但真画了底的
+// 命中类，直接上连续圆角 —— 目录层没盖到的页面也保底有卡片观感。
+static const char *kWDUniversalCls[] = {
+    "MMTableViewCell", "SettingCell", "MMTableView",
+    "MMUIButton", "MMTransparentButton", "MMUIView",
+    "MMHeadImageView", "MMWebImageView", "MMImageGridView",
+    "WCImageView", "ColorGradientView", NULL
+};
+
+static void WDUniversalApply(UIView *v) {
+    CGFloat w = v.bounds.size.width, h = v.bounds.size.height;
+    if (w < 24 || h < 20) return;
+    // 便宜检查在前：画底/图片判断不过就返回，最贵的 owner 链放最后
+    BOOL painted = NO;
+    UIColor *bg = v.backgroundColor;
+    painted = bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05;
+    if (!painted && [v isKindOfClass:[UIImageView class]]) painted = ((UIImageView *)v).image != nil;
+    if (!painted && [v isKindOfClass:[UIButton class]]) painted = YES; // 按钮常用背景图
+    if (!painted) return;                              // 没画底的不用圆
+    if (WDIsOurView(v)) return;
+    if (WDStyleTagOf(v) >= 0) return;                  // 已按目录样式化，别打架
+    UIViewController *own = WDOwnerVC(v);
+    const char *on = own ? class_getName([own class]) : NULL;
+    if (on && (strstr(on, "WCPay") || strstr(on, "PayMain") ||
+               strstr(on, "ServiceMain") || strstr(on, "WechatService"))) return; // 服务页走宿主卡
+    if (on && (WDIsChatController(own) || WDIsMeController(own))) return;
+    const char *nm = class_getName(object_getClass(v));
+    if (nm && (strstr(nm, "Search") || strstr(nm, "search") ||
+               strstr(nm, "Nav") || strstr(nm, "NavigationBar") ||
+               strstr(nm, "TabBar") || strstr(nm, "ToolBar") ||
+               strstr(nm, "StatusBar") || strstr(nm, "Keyboard") ||
+               strstr(nm, "BarBackground"))) return;   // 系统条一律不圆
+    if ([v isKindOfClass:[UIWindow class]]) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    @try {
+        v.layer.cornerRadius = gUniversalR;
+        if (@available(iOS 13.0, *)) v.layer.cornerCurve = kCACornerCurveContinuous;
+        v.layer.masksToBounds = YES;
+    } @catch (NSException *e) {}
+    [CATransaction commit];
+}
+
+static void WDUniversalInstall(void) {
+    static BOOL done = NO;
+    if (done) return;
+    done = YES;
+    SEL s = @selector(layoutSubviews);
+    for (int i = 0; kWDUniversalCls[i]; i++) {
+        Class cls = objc_getClass(kWDUniversalCls[i]);
+        if (!cls) { WDDiagLog(@"[uni] 类不存在(此版本微信): %s", kWDUniversalCls[i]); continue; }
+        Method m = class_getInstanceMethod(cls, s);
+        IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+        IMP supImp = NULL;
+        Class sup = class_getSuperclass(cls);
+        if (!orig && sup) supImp = class_getMethodImplementation(sup, s);
+        IMP stub = imp_implementationWithBlock(^(id slf) {
+            if (orig) ((void (*)(id, SEL))orig)(slf, s);
+            else if (supImp) ((void (*)(id, SEL))supImp)(slf, s);
+            if (!gLive || !gMaster || gSafe) return;
+            if (![NSThread isMainThread]) return;
+            if (![slf isKindOfClass:[UIView class]]) return;
+            @try { WDUniversalApply((UIView *)slf); } @catch (NSException *e) {}
+        });
+        if (!stub) continue;
+        BOOL ok = NO;
+        if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+        else {
+            const char *enc = m ? method_getTypeEncoding(m) : "v@:";
+            ok = class_addMethod(cls, s, stub, enc);
+        }
+        WDDiagLog(@"[uni] 直圆钩子 %s: %s", kWDUniversalCls[i], ok ? "OK" : "失败");
     }
 }
 
@@ -1969,6 +2053,7 @@ static void WDGoLive(void) {
     WDLogC("live");
     WDPageBgStart();
     WDStyleInvalidate();
+    WDUniversalInstall();
     @try { WDDecorateVisible(); } @catch (NSException *e) {}
 }
 
