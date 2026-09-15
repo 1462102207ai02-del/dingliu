@@ -1,4 +1,5 @@
 #import "WDSettings.h"
+#import "WDDiag.h"
 #import "WDPrefs.h"
 #import "WDCatalog.h"
 #import "WDStyle.h"
@@ -360,6 +361,76 @@
 
 @end
 
+#pragma mark - 诊断日志查看器
+
+@interface WDDiagViewerController : UIViewController
+@end
+
+@implementation WDDiagViewerController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+    self.title = @"诊断日志";
+    UITextView *tv = [[UITextView alloc] initWithFrame:self.view.bounds];
+    tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    tv.editable = NO;
+    tv.font = [UIFont systemFontOfSize:11];
+    if (@available(iOS 13.0, *)) {
+        tv.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
+        tv.textColor = [UIColor labelColor];
+    }
+    tv.text = WDDiagDump();
+    self.view = tv;
+
+    UIBarButtonItem *copy = [[UIBarButtonItem alloc] initWithTitle:@"复制" style:UIBarButtonItemStylePlain
+                                    target:self action:@selector(copyLog:)];
+    UIBarButtonItem *clear = [[UIBarButtonItem alloc] initWithTitle:@"清空" style:UIBarButtonItemStylePlain
+                                     target:self action:@selector(clearLog:)];
+    self.navigationItem.rightBarButtonItems = @[ copy, clear ];
+}
+
+- (void)reload {
+    UITextView *tv = (UITextView *)self.view;
+    NSString *txt = WDDiagDump();
+    tv.text = txt;
+    [tv scrollRangeToVisible:NSMakeRange(txt.length, 0)];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self reload];
+}
+
+- (void)copyLog:(id)s {
+    (void)s;
+    UIPasteboard *pb = [UIPasteboard generalPasteboard];
+    pb.string = WDDiagDump();
+    [self wdToast:@"已复制到剪贴板"];
+}
+
+- (void)clearLog:(id)s {
+    (void)s;
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"清空诊断日志"
+                                                               message:@"重新打开微信后日志会重新积累"
+                                                        preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"清空" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *_) {
+        WDDiagClear();
+        [self reload];
+    }]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+- (void)wdToast:(NSString *)msg {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:nil message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:a animated:YES completion:nil];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [a dismissViewControllerAnimated:YES completion:nil]; });
+}
+
+@end
+
 #pragma mark - 根设置页
 
 @interface WDSettingsController ()
@@ -507,10 +578,13 @@
     }
     if (ip.section == 3) {
         if (ip.row == 0) {
-            [self exportConfig];
+            WDDiagViewerController *v = [[WDDiagViewerController alloc] init];
+            [self.navigationController pushViewController:v animated:YES];
         } else if (ip.row == 1) {
-            [self importConfig];
+            [self exportConfig];
         } else if (ip.row == 2) {
+            [self importConfig];
+        } else if (ip.row == 3) {
             [self confirmTitle:@"全部恢复默认" msg:@"开关、圆角、缩进全部回到出厂。" ok:@"恢复" run:^{
                 [[WDPrefs shared] resetAll];
                 [self.tableView reloadData];

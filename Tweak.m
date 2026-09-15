@@ -1,4 +1,5 @@
 #import "WDCommon.h"
+#import "WDDiag.h"
 #import "WDCatalog.h"
 #import "WDPrefs.h"
 #import "WDStyle.h"
@@ -263,6 +264,7 @@ static BOOL WDIsPluginStorage(UIViewController *vc) {
 static void WDStyleSearchTree(UIView *v);
 static BOOL WDHeaderOn(void);
 static void WDEnsureRelayoutHook(Class cls);
+static void WDDecorateVisible(void);
 
 static BOOL WDIsChatController(UIViewController *vc) {
     if (!vc) return NO;
@@ -1236,6 +1238,43 @@ static void WDEnsureRelayoutHook(Class cls) {
 
 // 卡片行：点一下就会触发 layoutSubviews，contentView 被系统复位成整宽，
 // 我们做的内缩就丢了 —— 内容看起来就"错位"了。布局后贴回去即可。
+// 按压 / 选中：不触发 layoutSubviews，微信自己的高亮改动会在这时盖掉卡片。
+// 立刻把底板顶到最前、并重贴一次内缩，保证按压的每一帧都是对的。
+static void WDHookCellSelection(void) {
+    static int done = 0;
+    if (done) return;
+    Class cls = [UITableViewCell class];
+    static const SEL sels[2] = { @selector(setHighlighted:), @selector(setSelected:) };
+    for (int k = 0; k < 2; k++) {
+        SEL s = sels[k];
+        Method m = class_getInstanceMethod(cls, s);
+        if (!m) continue;
+        IMP orig = method_getImplementation(m);
+        IMP stub = imp_implementationWithBlock(^(id slf, BOOL on) {
+            if (orig) ((void (*)(id, SEL, BOOL))orig)(slf, s, on);
+            if (!gLive || !gMaster || gSafe) return;
+            if (![NSThread isMainThread]) return;
+            if (![slf isKindOfClass:[UITableViewCell class]]) return;
+            UITableViewCell *cell = (UITableViewCell *)slf;
+            if (WDStyleTagOf(cell) < 0) return;
+            @try {
+                int idx = WDIdxForClass(object_getClass(cell));
+                if (idx < 0) {
+                    if (gDefCellIdx == -2) gDefCellIdx = WDIndexOfClassName("MMTableViewCell");
+                    idx = gDefCellIdx;
+                }
+                if (idx >= 0 && idx < 160 && gSnap[idx].on) {
+                    WDStyleCellAt(cell, nil, nil, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
+                    WDDiagLogOnce([@"press" stringByAppendingString:NSStringFromClass([cell class])],
+                                  @"[press] %@ on=%d 重贴", NSStringFromClass([cell class]), on ? 1 : 0);
+                }
+            } @catch (NSException *e) {}
+        });
+        if (stub) method_setImplementation(m, stub);
+    }
+    done = 1;
+}
+
 static void WDHookCellLayout(void) {
     static int done = 0;
     if (done) return;
@@ -1254,11 +1293,15 @@ static void WDHookCellLayout(void) {
         UITableViewCell *cell = (UITableViewCell *)slf;
         @try {
             if (WDStyleTagOf(cell) >= 0) {
+                WDDiagLogOnce([@"celltag" stringByAppendingString:NSStringFromClass([cell class])],
+                              @"[cell] %@ 已刷(tag=%d)", NSStringFromClass([cell class]), WDStyleTagOf(cell));
                 WDStyleCellRelayout(cell);
                 return;
             }
             // 朋友圈：卡片视图在 cell 里面，cell 自己没进目录 —— 直接把 cell 刷成整张卡
             if (WDStyleIsMomentsCell(cell)) {
+                WDDiagLogOnce([@"moment" stringByAppendingString:NSStringFromClass([cell class])],
+                              @"[moments] 命中 cell=%@", NSStringFromClass([cell class]));
                 if (gMomentsIdx == -2) gMomentsIdx = WDIndexOfClassName("WCListFeedCellView");
                 if (gMomentsIdx >= 0 && gMomentsIdx < 160 && gSnap[gMomentsIdx].on) {
                     UITableView *tv = nil;
@@ -1270,7 +1313,11 @@ static void WDHookCellLayout(void) {
                     WDStyleCellAt(cell, tv, ip, gSnap[gMomentsIdx].i, gSnap[gMomentsIdx].r,
                                   gContinuous, gMomentsIdx);
                 }
+                return;
             }
+            // 没刷过、也不是朋友圈：记下这个 cell 类，方便排查"该刷没刷"
+            WDDiagLogOnce([@"cellplain" stringByAppendingString:NSStringFromClass([cell class])],
+                          @"[cell] %@ 未刷（不在目录 / 未命中朋友圈）", NSStringFromClass([cell class]));
         } @catch (NSException *e) {}
     });
     if (!stub) return;
@@ -1285,9 +1332,10 @@ static BOOL WDHookDidLayout(const char *clsName, int kind) {
     if (!cls) return NO;
     SEL s = @selector(viewDidLayoutSubviews);
     Method m = class_getInstanceMethod(cls, s);
-    static Class hooked[32];
+    static Class hooked[64];
+    static int hookedKind[64];
     static int hookedN = 0;
-    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls && hookedKind[i] == kind) return YES;
     IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
     Class sup = class_getSuperclass(cls);
     IMP supImp = sup ? class_getMethodImplementation(sup, s) : NULL;
@@ -1299,6 +1347,8 @@ static BOOL WDHookDidLayout(const char *clsName, int kind) {
         if (![slf isKindOfClass:[UIViewController class]]) return;
         UIViewController *vc = (UIViewController *)slf;
         if (!vc.isViewLoaded || !vc.view) return;
+        WDDiagLogOnce([@"didlayout" stringByAppendingString:NSStringFromClass([slf class])],
+                      @"[didLayout] %@ kind=%d", NSStringFromClass([slf class]), kind);
         WDNoAnim(^{
             @try {
                 if (kind == 1) {
@@ -1308,6 +1358,10 @@ static BOOL WDHookDidLayout(const char *clsName, int kind) {
                     if (pidx >= 0 && pidx < 160 && gSnap[pidx].on) {
                         WDStyleMePage(vc, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
                     }
+                } else if (kind == 3) {
+                    // 主 Tab 每次布局都全量扫一遍：搜索栏 / 表头 / 漏网的卡片，
+                    // 这里发生在"画出来之前"，用户看不到中间态
+                    WDDecorateVisible();
                 }
             } @catch (NSException *e) {}
         });
@@ -1319,7 +1373,7 @@ static BOOL WDHookDidLayout(const char *clsName, int kind) {
         const char *enc = m ? method_getTypeEncoding(m) : "v@:";
         ok = class_addMethod(cls, s, stub, enc);
     }
-    if (ok && hookedN < 32) hooked[hookedN++] = cls;
+    if (ok && hookedN < 64) { hooked[hookedN] = cls; hookedKind[hookedN] = kind; hookedN++; }
     return ok;
 }
 
@@ -1366,6 +1420,7 @@ static void WDInstallTableDisplay(void) {
         WDHookDidLayout(kTailVCs[i], 1);
     }
     WDStyleSetRelayoutHook(WDEnsureRelayoutHook);
+    WDHookCellSelection();
     WDHookCellLayout();
     static const char *kVCs[] = {
         "NewMainFrameViewController",
@@ -1413,6 +1468,11 @@ static void WDInstallTableDisplay(void) {
     WDHookTabSelect();
     WDHookDidLayout("MoreViewController", 2);
     WDHookDidLayout("NewSettingViewController", 2);
+    // 主 Tab 布局时全量扫一遍（搜索栏 / 表头 / 漏网的卡片都会在可见前被补上）
+    WDHookDidLayout("NewMainFrameViewController", 3);
+    WDHookDidLayout("ContactsViewController", 3);
+    WDHookDidLayout("FindFriendEntryViewController", 3);
+    WDHookDidLayout("MoreViewController", 3);
     WDHookTabWillAppear("NewMainFrameViewController");
     WDHookTabWillAppear("ContactsViewController");
     WDHookTabWillAppear("FindFriendEntryViewController");
@@ -1585,6 +1645,7 @@ static void WDInstallHooks(void) {
     snprintf(buf, sizeof(buf), "hooks: owners=%d cls=%d miss=%d noown=%d skip=%d",
              gHookedN, gClsN, miss, noown, skip);
     WDLogC(buf);
+    WDDiagLog(@"%@", [NSString stringWithUTF8String:buf]);
 }
 
 static void WDInstallOnce(void) {

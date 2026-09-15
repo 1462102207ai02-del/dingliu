@@ -5,7 +5,7 @@ ARCHS = arm64
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = WechatDuo
-WechatDuo_FILES = Tweak.m WDCatalog.m WDPrefs.m WDStyle.m WDSettings.m
+WechatDuo_FILES = Tweak.m WDCatalog.m WDPrefs.m WDStyle.m WDSettings.m WDDiag.m
 WechatDuo_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore
 WechatDuo_CFLAGS = -fobjc-arc -fblocks -Wno-unused-variable -Wno-unused-function -Wno-deprecated-declarations
 WechatDuo_LDFLAGS = -Wl,-undefined,dynamic_lookup

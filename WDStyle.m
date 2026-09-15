@@ -1,4 +1,5 @@
 #import "WDStyle.h"
+#import "WDDiag.h"
 #import "WDPrefs.h"
 #import <string.h>
 #import <stdio.h>
@@ -755,6 +756,11 @@ static void WDApplySelected(UITableViewCell *cell, CGFloat inset, CGFloat radius
     if (cell.selectionStyle == UITableViewCellSelectionStyleNone) {
         cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     }
+    WDDiagLogOnce([@"sel" stringByAppendingString:NSStringFromClass([cell class])],
+                  @"[sel] %@ 高亮块 h=%.0f w=%.0f vgap=%.0f 圆角=%.0f",
+                  NSStringFromClass([cell class]), fill.frame.size.height,
+                  fill.frame.size.width, vgap,
+                  fill.layer.cornerRadius);
 }
 
 static BOOL WDInsetByUs(UIView *v) {
@@ -1147,7 +1153,14 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     // 高度不像"那一条" → 这是外壳，往下找真正的搜索条
     if (!(looksBar && bounds.size.height <= 64.0)) {
         UIView *bar = WDFindSearchBar(view, 0);
-        if (bar) { WDStyleSearch(bar, inset, radius, continuous, tag); return; }
+        if (bar) {
+            WDDiagLogOnce([@"descend" stringByAppendingString:NSStringFromClass([view class])],
+                          @"[search] 外壳 %@ h=%.0f → 内条 %@ h=%.0f",
+                          NSStringFromClass([view class]), view.bounds.size.height,
+                          NSStringFromClass([bar class]), bar.bounds.size.height);
+            WDStyleSearch(bar, inset, radius, continuous, tag);
+            return;
+        }
         // 整棵子树都没有输入框，说明根本不是搜索栏，不要乱刷
         if (!WDHasTextFieldIn(view, 0) || bounds.size.height > 96.0) return;
     }
@@ -1180,6 +1193,9 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         capsule = WDSearchInnerBox(scope);
         if (!capsule || capsule == view) break;
         if (capsule.bounds.size.height <= 60.0) break;
+        WDDiagLogOnce([@"shell" stringByAppendingString:NSStringFromClass([capsule class])],
+                      @"[search] 外壳过高被剥掉: %@ h=%.0f w=%.0f",
+                      NSStringFromClass([capsule class]), capsule.bounds.size.height, capsule.bounds.size.width);
         UIColor *bg = capsule.backgroundColor;
         if (bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05) {
             if (!objc_getAssociatedObject(capsule, kWDOrigBgColorKey)) {
@@ -1193,6 +1209,12 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         capsule = nil;
     }
     objc_setAssociatedObject(view, kWDClearedViewsKey, sink, WD_ASSOC);
+    WDDiagLogOnce([@"searchbar" stringByAppendingString:NSStringFromClass([view class])],
+                  @"[search] 条=%@ h=%.0f 胶囊=%@ h=%.0f 清壳=%lu",
+                  NSStringFromClass([view class]), view.bounds.size.height,
+                  capsule ? NSStringFromClass([capsule class]) : @"(无)",
+                  capsule ? capsule.bounds.size.height : 0,
+                  (unsigned long)sink.count);
 
     if (capsule && capsule != view) {
         // 只留一层：搜索栏本体透明，圆角给胶囊。再挂底板就成了"双层搜索栏"
@@ -1423,6 +1445,12 @@ static UIView *WDMeProfileHost(UIViewController *vc) {
         id tv = [vc valueForKey:@"frontTableView"];
         if ([tv isKindOfClass:[UITableView class]]) {
             UIView *th = ((UITableView *)tv).tableHeaderView;
+            WDDiagLogOnce([@"mehdr" stringByAppendingString:NSStringFromClass([vc class])],
+                          @"[me] %@ frontTableView=%@ 表头=%@ h=%.0f",
+                          NSStringFromClass([vc class]),
+                          tv ? NSStringFromClass([tv class]) : @"(无)",
+                          th ? NSStringFromClass([th class]) : @"(无)",
+                          th ? th.bounds.size.height : 0);
             if (th && th.bounds.size.width >= 160 &&
                 th.bounds.size.height >= 64 && th.bounds.size.height <= 360) {
                 const char *hn = class_getName(object_getClass(th));
@@ -1430,10 +1458,16 @@ static UIView *WDMeProfileHost(UIViewController *vc) {
             }
         }
     } @catch (NSException *e) {}
-    if (header) return header;
+    if (header) {
+        WDDiagLogOnce([@"mehost" stringByAppendingString:NSStringFromClass([header class])],
+                      @"[me] 资料卡宿主(表头)=%@ h=%.0f", NSStringFromClass([header class]), header.bounds.size.height);
+        return header;
+    }
     UIView *headHost = nil;
     @try {
         id head = [vc valueForKey:@"headImage"];
+        WDDiagLogOnce([@"mehead" stringByAppendingString:NSStringFromClass([vc class])],
+                      @"[me] headImage=%@", head ? NSStringFromClass([head class]) : @"(无)");
         if ([head isKindOfClass:[UIView class]]) {
             UIView *p = ((UIView *)head).superview;
             int u = 0;
@@ -1462,6 +1496,9 @@ static UIView *WDMeProfileHost(UIViewController *vc) {
 void WDStyleMePage(UIViewController *vc, CGFloat inset, CGFloat radius, BOOL continuous, int tag) {
     if (!vc || !vc.isViewLoaded) return;
     UIView *host = WDMeProfileHost(vc);
+    WDDiagLogOnce([@"mepage" stringByAppendingString:NSStringFromClass([vc class])],
+                  @"[me] WDStyleMePage %@ 宿主=%@", NSStringFromClass([vc class]),
+                  host ? NSStringFromClass([host class]) : @"(没找到)");
     if (host) WDStyleProfile(host, inset, radius, continuous, tag);
     @try {
         id d = [vc valueForKey:@"textStateDetailView"];
@@ -1618,6 +1655,11 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
     WDClearFillViews(cell, 0);
     WDClearFillViews(cell.contentView, 0);
     BOOL catRow = WDIsContactsCategoryCell(cell, tv, ip);
+    WDDiagLogOnce([@"cellat" stringByAppendingString:NSStringFromClass([cell class])],
+                  @"[cellAt] %@ sec=%ld row=%ld corners=%lu moments=%d inx=%.0f r=%.0f",
+                  NSStringFromClass([cell class]),
+                  (long)(ip ? ip.section : -1), (long)(ip ? ip.row : -1),
+                  (unsigned long)corners, moments ? 1 : 0, inx, radius);
     // 引导箭头：所有卡片行都隐藏（导航栏返回键不在 cell 内，不受影响）
     NSMutableArray *sink = [NSMutableArray array];
     WDHideArrows(cell, 0, sink);
