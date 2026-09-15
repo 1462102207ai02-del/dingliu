@@ -23,8 +23,10 @@ void WDStyleHostCard(UIView *host, CGFloat inset, CGFloat radius, BOOL continuou
 void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL continuous);
 
 void WDStyleSetContinuous(BOOL on);
+void WDStyleSetRelayoutHook(void (*fn)(Class cls));
 void WDStyleCellRelayout(UITableViewCell *cell);
 void WDStyleRelayoutView(UIView *view);
+BOOL WDStyleIsMomentsCell(UITableViewCell *cell);
 
 int  WDStyleTagOf(UIView *view);
 void WDStyleRevertView(UIView *view);

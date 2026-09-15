@@ -1245,11 +1245,33 @@ static void WDHookCellLayout(void) {
     if (!m) return;
     static IMP orig = NULL;
     orig = method_getImplementation(m);
+    static int gMomentsIdx = -2;
     IMP stub = imp_implementationWithBlock(^(id slf) {
         if (orig) ((void (*)(id, SEL))orig)(slf, s);
         if (!gLive || !gMaster || gSafe) return;
         if (![NSThread isMainThread]) return;
-        @try { WDStyleCellRelayout((UITableViewCell *)slf); } @catch (NSException *e) {}
+        if (![slf isKindOfClass:[UITableViewCell class]]) return;
+        UITableViewCell *cell = (UITableViewCell *)slf;
+        @try {
+            if (WDStyleTagOf(cell) >= 0) {
+                WDStyleCellRelayout(cell);
+                return;
+            }
+            // 朋友圈：卡片视图在 cell 里面，cell 自己没进目录 —— 直接把 cell 刷成整张卡
+            if (WDStyleIsMomentsCell(cell)) {
+                if (gMomentsIdx == -2) gMomentsIdx = WDIndexOfClassName("WCListFeedCellView");
+                if (gMomentsIdx >= 0 && gMomentsIdx < 160 && gSnap[gMomentsIdx].on) {
+                    UITableView *tv = nil;
+                    UIView *p = cell.superview;
+                    int u = 0;
+                    while (p && u < 6 && ![p isKindOfClass:[UITableView class]]) p = p.superview, u++;
+                    if ([p isKindOfClass:[UITableView class]]) tv = (UITableView *)p;
+                    NSIndexPath *ip = tv ? [tv indexPathForCell:cell] : nil;
+                    WDStyleCellAt(cell, tv, ip, gSnap[gMomentsIdx].i, gSnap[gMomentsIdx].r,
+                                  gContinuous, gMomentsIdx);
+                }
+            }
+        } @catch (NSException *e) {}
     });
     if (!stub) return;
     method_setImplementation(m, stub);
@@ -1343,6 +1365,7 @@ static void WDInstallTableDisplay(void) {
         WDHookTailClear(kTailVCs[i]);
         WDHookDidLayout(kTailVCs[i], 1);
     }
+    WDStyleSetRelayoutHook(WDEnsureRelayoutHook);
     WDHookCellLayout();
     static const char *kVCs[] = {
         "NewMainFrameViewController",

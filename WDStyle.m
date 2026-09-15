@@ -29,6 +29,10 @@ static const void *kWDStyleKindKey    = &kWDStyleKindKey;
 static const void *kWDStyleInsetKey   = &kWDStyleInsetKey;
 static const void *kWDStyleRadiusKey  = &kWDStyleRadiusKey;
 static const void *kWDStyleBusyKey    = &kWDStyleBusyKey;
+static const void *kWDMomentsKey      = &kWDMomentsKey;
+
+// 朋友圈每条动态是一张独立卡：四角全圆 + 上下留缝 + 不要分隔线
+#define WD_MOMENTS_VGAP 6.0
 
 enum { WDKindStyleView = 0, WDKindStyleCell = 1, WDKindStyleSearch = 2, WDKindStyleProfile = 3 };
 
@@ -46,6 +50,12 @@ static char gInL[16];
 static char gInD[16];
 static char gOutL[16];
 static char gOutD[16];
+
+// "布局后重贴"的钩子安装器由 Tweak.m 提供（那里才有 gLive/gMaster 开关），
+// 样式层只负责"这个类也需要重贴"的请求
+static void (*gRelayoutHookFn)(Class cls) = NULL;
+void WDStyleSetRelayoutHook(void (*fn)(Class cls)) { gRelayoutHookFn = fn; }
+static void WDRequestRelayoutHook(Class cls) { if (cls && gRelayoutHookFn) gRelayoutHookFn(cls); }
 
 void WDStyleSyncColors(BOOL master, BOOL inOn, const char *inL, const char *inD,
                        BOOL outOn, const char *outL, const char *outD) {
@@ -80,6 +90,7 @@ static UIColor *WDHexC(const char *s) {
 @property (nonatomic, assign) CGFloat radius;
 @property (nonatomic, assign) NSUInteger corners;
 @property (nonatomic, assign) CGFloat inset;
+@property (nonatomic, assign) CGFloat vInset; // 上下也留缝（朋友圈每条动态一张独立卡）
 @property (nonatomic, assign) BOOL showSep;
 @property (nonatomic, assign) BOOL punch; // YES=打洞遮罩（不改内容坐标）
 @end
@@ -125,7 +136,9 @@ static UIColor *WDHexC(const char *s) {
         return;
     }
     CGFloat inx = MAX(0, _inset);
-    CGRect hole = UIEdgeInsetsInsetRect(r, UIEdgeInsetsMake(0, inx, 0, inx));
+    CGFloat vix = MAX(0, _vInset);
+    CGRect hole = UIEdgeInsetsInsetRect(r, UIEdgeInsetsMake(vix, inx, vix, inx));
+    if (hole.size.width < 8 || hole.size.height < 8) hole = UIEdgeInsetsInsetRect(r, UIEdgeInsetsMake(0, inx, 0, inx));
     if (hole.size.width < 8) hole = r;
     CGFloat rad = MIN(_radius, MIN(hole.size.width, hole.size.height) / 2.0);
     UIRectCorner uc = 0;
@@ -663,6 +676,27 @@ static void WDHideArrows(UIView *v, int depth, NSMutableArray *sink) {
     for (UIView *s in v.subviews) WDHideArrows(s, depth + 1, sink);
 }
 
+// 子树里是否是朋友圈动态卡片（WCList*CellView / SNS*），结果缓存在 cell 上
+static BOOL WDMomentsScan(UIView *v, int depth) {
+    if (!v || depth > 4) return NO;
+    const char *nm = class_getName(object_getClass(v));
+    if (nm && ((strstr(nm, "WCList") && strstr(nm, "CellView")) || strstr(nm, "SNS"))) return YES;
+    for (UIView *s in v.subviews) if (WDMomentsScan(s, depth + 1)) return YES;
+    return NO;
+}
+
+BOOL WDStyleIsMomentsCell(UITableViewCell *cell) {
+    if (!cell) return NO;
+    id c = objc_getAssociatedObject(cell, kWDMomentsKey);
+    if (c) return [c boolValue];
+    // 内容可能还没装进来：命中才缓存，没命中下次布局再查
+    if (WDMomentsScan(cell, 0)) {
+        objc_setAssociatedObject(cell, kWDMomentsKey, @YES, WD_ASSOC);
+        return YES;
+    }
+    return NO;
+}
+
 static BOOL WDIsContactsCategoryCell(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip) {
     if (!cell) return NO;
     if (!tv) {
@@ -681,7 +715,6 @@ static void WDApplySelected(UITableViewCell *cell, CGFloat inset, CGFloat radius
     if (!cell) return;
     CGRect bounds = cell.bounds;
     if (bounds.size.width < 32 || bounds.size.height < 8) return;
-    (void)inset; (void)radius; (void)corners;
     UIView *host = cell.selectedBackgroundView;
     if (!host || !objc_getAssociatedObject(host, kWDSelKey)) {
         host = [[UIView alloc] initWithFrame:bounds];
@@ -699,9 +732,20 @@ static void WDApplySelected(UITableViewCell *cell, CGFloat inset, CGFloat radius
     host.backgroundColor = [UIColor clearColor];
     UIView *fill = [host viewWithTag:0x57445342];
     if (!fill) return;
-    fill.frame = host.bounds;
-    fill.layer.cornerRadius = 0;
-    fill.layer.masksToBounds = NO;
+    // 高亮块必须和卡片同一个洞、同一套圆角 —— 否则一点按整行变成方灰色块，
+    // 看起来就像"内容错位 / 页面浮起来了"（通讯录五大类和「我」页资料卡都踩过）
+    CGFloat inx = MAX(0, inset);
+    if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
+    BOOL moments = WDStyleIsMomentsCell(cell);
+    CGFloat vgap = moments ? WD_MOMENTS_VGAP : 0;
+    fill.frame = UIEdgeInsetsInsetRect(host.bounds, UIEdgeInsetsMake(vgap, inx, vgap, inx));
+    if (fill.frame.size.width < 8 || fill.frame.size.height < 8) fill.frame = host.bounds;
+    if (corners != 0 && radius > 0.5) {
+        WDStyleRoundCorners(fill, radius, corners, YES, 0);
+    } else {
+        fill.layer.cornerRadius = 0;
+        fill.layer.masksToBounds = NO;
+    }
     fill.clipsToBounds = NO;
     if (@available(iOS 13.0, *)) {
         fill.backgroundColor = [UIColor tertiarySystemFillColor];
@@ -814,7 +858,7 @@ static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
     WDClampChildren(cv);
 }
 
-static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL showSep, BOOL punch, BOOL asCellBg) {
+static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL showSep, BOOL punch, BOOL asCellBg, CGFloat vgap) {
     WDCardPlate *plate = objc_getAssociatedObject(host, kWDPlateKey);
     if (![plate isKindOfClass:[WDCardPlate class]]) {
         plate = [[WDCardPlate alloc] initWithFrame:bounds];
@@ -854,6 +898,7 @@ static void WDPlacePlate(UIView *host, CGRect bounds, CGFloat inset, CGFloat rad
     plate.radius = radius;
     plate.corners = corners;
     plate.inset = inset;
+    plate.vInset = vgap;
     plate.punch = punch;
     plate.showSep = showSep;
     if (punch) {
@@ -900,7 +945,7 @@ void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
         view.opaque = NO;
     }
     // 不 clip、不改子视图 frame —— 折叠横幅要点得着。多设备卡只打孔缩进，颜色保持原生。
-    WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+    WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO, 0);
     (void)continuous;
 }
 
@@ -1109,6 +1154,9 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
 
     objc_setAssociatedObject(view, kWDTagKey, @(tag), WD_ASSOC);
     WDRecordStyle(view, WDKindStyleSearch, inx, radius);
+    WDRequestRelayoutHook(object_getClass(view));
+    NSMutableArray *sink = objc_getAssociatedObject(view, kWDClearedViewsKey);
+    if (![sink isKindOfClass:[NSMutableArray class]]) sink = [NSMutableArray array];
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
@@ -1124,7 +1172,28 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         }
     } @catch (NSException *e) {}
 
-    UIView *capsule = WDSearchInnerBox(view);
+    // 逐层剥外壳：选中"胶囊"后如果它还高于 60pt，说明拿到的仍是外壳不是输入条，
+    // 清掉它的底再往里找一层 —— 保证最后画圆角的永远是真正的那条输入条
+    UIView *capsule = nil;
+    UIView *scope = view;
+    for (int tries = 0; tries < 3; tries++) {
+        capsule = WDSearchInnerBox(scope);
+        if (!capsule || capsule == view) break;
+        if (capsule.bounds.size.height <= 60.0) break;
+        UIColor *bg = capsule.backgroundColor;
+        if (bg && ![bg isEqual:[UIColor clearColor]] && CGColorGetAlpha(bg.CGColor) > 0.05) {
+            if (!objc_getAssociatedObject(capsule, kWDOrigBgColorKey)) {
+                objc_setAssociatedObject(capsule, kWDOrigBgColorKey, bg, WD_ASSOC);
+            }
+            if (![sink containsObject:capsule]) [sink addObject:capsule];
+            capsule.backgroundColor = [UIColor clearColor];
+            capsule.opaque = NO;
+        }
+        scope = capsule;
+        capsule = nil;
+    }
+    objc_setAssociatedObject(view, kWDClearedViewsKey, sink, WD_ASSOC);
+
     if (capsule && capsule != view) {
         // 只留一层：搜索栏本体透明，圆角给胶囊。再挂底板就成了"双层搜索栏"
         WDDetachPlate(view);
@@ -1142,15 +1211,13 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         }
         // 胶囊外面如果还套着画了底的容器（60~70pt 高的白条），一并清掉，
         // 否则就是截图里那种"巨型白色胶囊"
-        NSMutableArray *sink = objc_getAssociatedObject(view, kWDClearedViewsKey);
-        if (![sink isKindOfClass:[NSMutableArray class]]) sink = [NSMutableArray array];
         WDClearMiddleLayers(view, capsule, sink);
-        objc_setAssociatedObject(view, kWDClearedViewsKey, sink, WD_ASSOC);
+        WDRequestRelayoutHook(object_getClass(capsule));
         return;
     }
     // 没有内层：它自己就是那一条，收窄后补一张圆角卡
     WDSearchNarrow(view, inx);
-    WDPlacePlate(view, view.bounds, 0, radius, 15, NO, NO, NO);
+    WDPlacePlate(view, view.bounds, 0, radius, 15, NO, NO, NO, 0);
     CGFloat sh = view.bounds.size.height;
     WDStyleRound(view, (sh > 0 && sh <= 48) ? MIN(radius, sh / 2.0) : MIN(radius, 18.0), continuous, tag);
 }
@@ -1283,6 +1350,8 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
     CGFloat inx = MAX(0, inset);
     if (inx > 0 && bounds.size.width <= inx * 2 + 40) inx = 0;
     WDRecordStyle(view, WDKindStyleProfile, inx, radius);
+    // 资料卡被微信按压时刷回白底：布局后自动重贴，不用等"进出一次页面"
+    WDRequestRelayoutHook(object_getClass(view));
     if (!objc_getAssociatedObject(view, kWDOrigBgColorKey)) {
         UIColor *oc = view.backgroundColor;
         objc_setAssociatedObject(view, kWDOrigBgColorKey, oc ? (id)oc : (id)[NSNull null], WD_ASSOC);
@@ -1305,7 +1374,7 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
         if ([sep isKindOfClass:[UIView class]]) { ((UIView *)sep).hidden = YES; ((UIView *)sep).alpha = 0; }
     } @catch (NSException *e) {}
     WDHideLineViews(view, 0);
-    WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+    WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO, 0);
     // 资料卡和顶栏剥离开：顶部留一条缝，让四个圆角都露出来
     CGFloat topGap = 10.0;
     CGRect hole = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(0, inx, 0, inx));
@@ -1487,7 +1556,7 @@ void WDStyleHostCard(UIView *host, CGFloat inset, CGFloat radius, BOOL continuou
     host.backgroundColor = WDResolvedIn();
     host.opaque = YES;
     host.clipsToBounds = NO;
-    WDPlacePlate(host, bounds, inx, radius, 15, NO, YES, NO);
+    WDPlacePlate(host, bounds, inx, radius, 15, NO, YES, NO, 0);
     (void)continuous;
 }
 
@@ -1521,7 +1590,14 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
     }
 
     BOOL showSep = (corners == 0) || ((corners & (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner)) == 0);
-    WDPlacePlate(cell, bounds, inx, radius, corners, showSep, YES, NO);
+    // 朋友圈：每条动态一张独立卡 —— 四角全圆、上下留缝（分隔线也就自然没了）
+    BOOL moments = WDStyleIsMomentsCell(cell);
+    if (moments) {
+        corners = 15;
+        showSep = NO;
+    }
+    CGFloat vgap = moments ? WD_MOMENTS_VGAP : 0;
+    WDPlacePlate(cell, bounds, inx, radius, corners, showSep, YES, NO, vgap);
 
     UIColor *inC = WDResolvedIn();
     cell.backgroundColor = inC;
@@ -1734,10 +1810,13 @@ void WDStyleCellRelayout(UITableViewCell *cell) {
         if (b.size.width >= 32 && b.size.height >= 8) {
             CGFloat inx = [n doubleValue];
             CGFloat rad = [(NSNumber *)objc_getAssociatedObject(cell, kWDStyleRadiusKey) doubleValue];
-            NSUInteger corners = WDSectionCorners(cell);
-            BOOL showSep = (corners == 0) ||
-                           ((corners & (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner)) == 0);
-            WDPlacePlate(cell, b, inx, rad, corners, showSep, YES, NO);
+            BOOL moments = WDStyleIsMomentsCell(cell);
+            NSUInteger corners = moments ? 15 : WDSectionCorners(cell);
+            BOOL showSep = moments ? NO :
+                           ((corners == 0) ||
+                            ((corners & (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner)) == 0));
+            CGFloat vgap = moments ? WD_MOMENTS_VGAP : 0;
+            WDPlacePlate(cell, b, inx, rad, corners, showSep, YES, NO, vgap);
             WDBalanceInner(cell, inx);
         }
     } @catch (NSException *e) {}
