@@ -168,6 +168,7 @@ static int WDIdxForClass(Class c) {
 #pragma mark - 快照
 
 static BOOL WDHookDidLayout(const char *clsName, int kind);
+static BOOL WDHookTabDidAppear(const char *clsName);
 static void WDPageBgApply(void);
 
 // 切 tab 后微信会把「我」页资料卡等重置回原生，而 VC 的 viewDidLayoutSubviews
