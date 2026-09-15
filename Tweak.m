@@ -171,6 +171,7 @@ static CGFloat gUniversalR = 14.0;   // 类名直圆层用的半径（跟随全�
 
 static BOOL WDHookDidLayout(const char *clsName, int kind);
 static BOOL WDHookTabDidAppear(const char *clsName);
+static void WDUniversalApply(UIView *v);
 static void WDPageBgApply(void);
 
 // 切 tab 后微信会把「我」页资料卡等重置回原生，而 VC 的 viewDidLayoutSubviews
