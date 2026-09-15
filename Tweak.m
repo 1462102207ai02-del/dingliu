@@ -942,6 +942,7 @@ static void WDClearCountOnOwner(UIViewController *own);
 static BOOL WDHookFoldState(void);
 static BOOL WDHookTabSelect(void);
 static BOOL WDHookTabAppear(const char *clsName);
+static BOOL WDHookTabWillAppear(const char *clsName);
 static BOOL WDHookProfileLayout(const char *clsName);
 static BOOL WDHookMeLayout(const char *clsName);
 
@@ -1160,11 +1161,12 @@ static BOOL WDHookMeLayout(const char *clsName) {
     return YES;
 }
 
-// 新的朋友 / 好友申请这类页面：内容短，底部会露出一大片底色，整块透明掉
+// 新的朋友 / 好友申请这类页面：内容短，底部会露出一大片底色，刷成页面底色。
+// 挂在 viewWillAppear（页面可见之前）而不是 viewDidAppear，否则会看到"闪一下"。
 static BOOL WDHookTailClear(const char *clsName) {
     Class cls = objc_getClass(clsName);
     if (!cls) return NO;
-    SEL s = @selector(viewDidAppear:);
+    SEL s = @selector(viewWillAppear:);
     Method m = class_getInstanceMethod(cls, s);
     static Class hooked[16];
     static int hookedN = 0;
@@ -1251,6 +1253,11 @@ static void WDInstallTableDisplay(void) {
     WDHookTabAppear("ContactsViewController");
     WDHookTabAppear("FindFriendEntryViewController");
     WDHookTabAppear("MoreViewController");
+    WDHookTabWillAppear("NewMainFrameViewController");
+    WDHookTabWillAppear("ContactsViewController");
+    WDHookTabWillAppear("FindFriendEntryViewController");
+    WDHookTabWillAppear("MoreViewController");
+    WDHookTabWillAppear("NewSettingViewController");
     WDHookSearchBarClass("WCSearchBar");
     WDHookSearchBarClass("MMUISearchBar");
     WDHookSearchBarClass("FavSearchBar");
@@ -1339,6 +1346,48 @@ static BOOL WDHookTabSelect(void) {
         const char *enc = m ? method_getTypeEncoding(m) : "v@:Q";
         ok = class_addMethod(cls, s, stub, enc);
     }
+    return ok;
+}
+
+// 与 WDHookTabAppear 做同样的事，但抢在页面可见之前完成 —— 页面底色 / 资料卡
+// 若是可见之后才改，用户就会看到"闪一下"。
+static BOOL WDHookTabWillAppear(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(viewWillAppear:);
+    Method m = class_getInstanceMethod(cls, s);
+    static Class hooked[32];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf, BOOL animated) {
+        if (orig) ((void (*)(id, SEL, BOOL))orig)(slf, s, animated);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { WDPageBgApply(); } @catch (NSException *e) {}
+        if ([slf isKindOfClass:[UIViewController class]]) {
+            UIViewController *vc = (UIViewController *)slf;
+            const char *cn = class_getName([slf class]);
+            if (cn && (strstr(cn, "MoreViewController") || strstr(cn, "NewSettingViewController"))) {
+                int pidx = WDIndexOfClassName("TextStateProfileCardContentView");
+                if (pidx >= 0 && gSnap[pidx].on && vc.isViewLoaded && vc.view) {
+                    @try {
+                        [vc.view setNeedsLayout];
+                        [vc.view layoutIfNeeded];
+                        WDStyleMePage(vc, gSnap[pidx].i, gSnap[pidx].r, gContinuous, pidx);
+                    } @catch (NSException *e) {}
+                }
+            }
+        }
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:B";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 32) hooked[hookedN++] = cls;
     return ok;
 }
 

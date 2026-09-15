@@ -111,11 +111,14 @@ jobs:
       - name: Create / Update Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.15
-          name: WechatDuo v1.1.15
+          tag_name: v1.1.16
+          name: WechatDuo v1.1.16
           body: |
             微信 8.0.70+ 全页面卡片化（TrollFools 注入）
 
+            - **v1.1.16**
+              - 通讯录五大类与好友行不再错位：内部元素超出卡片时「收窄」而非「平移」
+              - 「新的朋友」、「我」页资料卡：改动挪到 viewWillAppear，进页面不再闪一下
             - **v1.1.15**
               - 搜索栏：识别放宽 + 表头/可见面板兜底，首页与通讯录搜索栏真正套上圆角与缩进
               - 「我」页资料卡与顶栏剥离，顶部留缝，四个圆角完整露出

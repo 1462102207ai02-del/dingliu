@@ -738,19 +738,48 @@ static void WDFrameInset(UIView *v, CGFloat inx) {
     v.frame = want;
 }
 
-// 兜底：内部元素若仍超出容器（微信手动布局没跟上新宽度），把它拉回卡片内
+// 兜底：内部元素若仍超出容器（微信手动布局没跟上新宽度），
+// 一律「收窄」而不是「平移」—— 平移只挪超出的那几个，会把一行的相对位置搞错位。
+static void WDFitChild(UIView *s, CGFloat w) {
+    CGRect f = s.frame;
+    CGRect want = f;
+    if (want.origin.x < 0) want.origin.x = 0;
+    CGFloat over = want.origin.x + want.size.width - w;
+    if (over > 1.0) {
+        CGFloat nw = want.size.width - over;
+        if (nw < 14.0) {
+            want.origin.x = MAX(0, w - want.size.width); // 时间标签这类窄元素整体左移
+        } else {
+            want.size.width = nw;                        // 左对齐元素原地收窄
+        }
+    }
+    if (fabs(want.origin.x - f.origin.x) < 0.5 && fabs(want.size.width - f.size.width) < 0.5) return;
+    if (!objc_getAssociatedObject(s, kWDOrigFrameKey)) {
+        objc_setAssociatedObject(s, kWDOrigFrameKey, [NSValue valueWithCGRect:f], WD_ASSOC);
+    }
+    s.frame = want;
+}
+
 static void WDClampChildren(UIView *host) {
     if (!host) return;
     CGFloat w = host.bounds.size.width;
     if (w < 40) return;
     for (UIView *s in host.subviews) {
         if (s.hidden || s.alpha < 0.05) continue;
-        CGRect f = s.frame;
-        CGFloat over = CGRectGetMaxX(f) - w;
-        if (over > 1.0) WDNudgeInner(s, -over);
-        else if (f.origin.x < -1.0) WDNudgeInner(s, -f.origin.x);
-        else WDClearNudge(s);
+        WDClearNudge(s);   // 清掉旧的位移补偿，避免两种方案叠加
+        WDFitChild(s, w);
     }
+}
+
+// 还原时把收窄过的子元素也放回去
+static void WDRestoreFramesDeep(UIView *v, int depth) {
+    if (!v || depth > 4) return;
+    NSValue *orig = objc_getAssociatedObject(v, kWDOrigFrameKey);
+    if (orig) {
+        v.frame = [orig CGRectValue];
+        objc_setAssociatedObject(v, kWDOrigFrameKey, nil, WD_ASSOC);
+    }
+    for (UIView *s in v.subviews) WDRestoreFramesDeep(s, depth + 1);
 }
 
 static void WDBalanceInner(UITableViewCell *cell, CGFloat inset) {
@@ -1596,6 +1625,7 @@ void WDStyleRevertView(UIView *view) {
         WDFrameInset(cell.contentView ?: cell, 0);
         UIView *it = WDCellItemView(cell);
         if (it && it != cell.contentView) WDFrameInset(it, 0);
+        WDRestoreFramesDeep(cell, 0);
         WDShowArrows(cell);
         WDClearNudgeDeep(cell, 0);
         WDRevertRound(cell.contentView);
