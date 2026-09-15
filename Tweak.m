@@ -1244,7 +1244,7 @@ static void WDHookCellSelection(void) {
     static int done = 0;
     if (done) return;
     Class cls = [UITableViewCell class];
-    static const SEL sels[2] = { @selector(setHighlighted:), @selector(setSelected:) };
+    SEL sels[2] = { @selector(setHighlighted:), @selector(setSelected:) };
     for (int k = 0; k < 2; k++) {
         SEL s = sels[k];
         Method m = class_getInstanceMethod(cls, s);
