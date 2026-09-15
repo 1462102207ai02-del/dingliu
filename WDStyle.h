@@ -13,6 +13,7 @@ void WDStyleFold(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
 void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 void WDStyleMePage(UIViewController *vc, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 void WDStyleClearHeader(UIView *view);
+void WDStyleClearTableTail(UIView *root);
 void WDStyleHostCard(UIView *host, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 
 void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL continuous);

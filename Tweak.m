@@ -410,7 +410,12 @@ static void WDStyleSearchIfOn(UIView *v) {
         if (WDStyleTagOf(v) >= 0) WDStyleRevertView(v);
         return;
     }
-    WDStyleSearch(v, gSnap[idx].i, gSnap[idx].r, gContinuous, idx);
+    // 搜索栏默认跟随卡片的全局圆角 / 缩进，只有用户单独改过这个类才用类级数值
+    WDPrefs *sp = [WDPrefs shared];
+    NSString *sname = @(WDCatalogItems()[idx].cls);
+    CGFloat r = [sp hasCustomRadius:sname] ? gSnap[idx].r : sp.globalRadius;
+    CGFloat i = [sp hasCustomInset:sname] ? gSnap[idx].i : sp.globalInset;
+    WDStyleSearch(v, i, r, gContinuous, idx);
 }
 
 static void WDStyleSearchTree(UIView *v) {
@@ -1148,7 +1153,49 @@ static BOOL WDHookMeLayout(const char *clsName) {
     return YES;
 }
 
+// 新的朋友 / 好友申请这类页面：内容短，底部会露出一大片底色，整块透明掉
+static BOOL WDHookTailClear(const char *clsName) {
+    Class cls = objc_getClass(clsName);
+    if (!cls) return NO;
+    SEL s = @selector(viewDidAppear:);
+    Method m = class_getInstanceMethod(cls, s);
+    static Class hooked[16];
+    static int hookedN = 0;
+    for (int i = 0; i < hookedN; i++) if (hooked[i] == cls) return YES;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf, BOOL animated) {
+        if (orig) ((void (*)(id, SEL, BOOL))orig)(slf, s, animated);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        if (![slf isKindOfClass:[UIViewController class]]) return;
+        UIViewController *vc = (UIViewController *)slf;
+        if (!vc.isViewLoaded || !vc.view) return;
+        @try { WDStyleClearTableTail(vc.view); } @catch (NSException *e) {}
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(350 * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            @try { WDStyleClearTableTail(vc.view); } @catch (NSException *e) {}
+        });
+    });
+    if (!stub) return NO;
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) {
+        method_setImplementation(m, stub);
+        ok = YES;
+    } else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:B";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok && hookedN < 16) hooked[hookedN++] = cls;
+    return ok;
+}
+
 static void WDInstallTableDisplay(void) {
+    static const char *kTailVCs[] = {
+        "SayHelloViewController", "HelloViewController", "NewFriendsViewController",
+        "ApplyFriendListViewController", "FriendAsistSessionViewController",
+        "AddFriendEntryViewController", NULL
+    };
+    for (int i = 0; kTailVCs[i]; i++) WDHookTailClear(kTailVCs[i]);
     static const char *kVCs[] = {
         "NewMainFrameViewController",
         "ContactsViewController",
