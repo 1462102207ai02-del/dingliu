@@ -14,6 +14,7 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
 void WDStyleMePage(UIViewController *vc, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 void WDStyleClearHeader(UIView *view);
 void WDStyleClearTableTail(UIView *root);
+BOOL WDStyleIsSearchBarLike(UIView *view);
 void WDStyleHostCard(UIView *host, CGFloat inset, CGFloat radius, BOOL continuous, int tag);
 
 void WDStyleSettingsCell(UITableViewCell *cell, CGFloat inset, CGFloat radius, NSUInteger corners, BOOL continuous);

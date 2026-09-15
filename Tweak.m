@@ -418,12 +418,17 @@ static void WDStyleSearchIfOn(UIView *v) {
     WDStyleSearch(v, i, r, gContinuous, idx);
 }
 
+static BOOL WDTreeHasSearchBar(UIView *v, int depth) {
+    if (!v || depth > 4) return NO;
+    if (WDStyleIsSearchBarLike(v)) return YES;
+    for (UIView *s in v.subviews) if (WDTreeHasSearchBar(s, depth + 1)) return YES;
+    return NO;
+}
+
 static void WDStyleSearchTree(UIView *v) {
     if (!v) return;
-    const char *nm = class_getName(object_getClass(v));
-    BOOL wrap = nm && (strstr(nm, "SearchPanel") || strstr(nm, "ContactsSearch") ||
-                       strstr(nm, "SearchBarContainer"));
-    if (wrap || (v.bounds.size.height > 56 && nm && strstr(nm, "SearchBar"))) {
+    BOOL wrap = WDStyleIsSearchBarLike(v) && v.bounds.size.height > 56;
+    if (wrap) {
         NSMutableArray *q = [NSMutableArray arrayWithArray:v.subviews];
         int n = 0;
         BOOL hit = NO;
@@ -431,17 +436,14 @@ static void WDStyleSearchTree(UIView *v) {
             UIView *sv = q.firstObject;
             [q removeObjectAtIndex:0];
             n++;
-            const char *sn = class_getName(object_getClass(sv));
-            if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar") ||
-                       strstr(sn, "FavSearchBar") || strstr(sn, "WAMainFrameTaskBarSearchBar")) &&
-                sv.bounds.size.height <= 56) {
+            if (WDStyleIsSearchBarLike(sv) && sv.bounds.size.height <= 56) {
                 WDStyleSearchIfOn(sv);
                 hit = YES;
                 continue;
             }
             if (sv.subviews.count && n < 20) [q addObjectsFromArray:sv.subviews];
         }
-        if (!hit && !wrap) WDStyleSearchIfOn(v);
+        if (!hit) WDStyleSearchIfOn(v);
         return;
     }
     WDStyleSearchIfOn(v);
@@ -884,9 +886,11 @@ static BOOL WDHookWillDisplayHeader(const char *clsName) {
         @try {
             if ([header isKindOfClass:[UIView class]]) {
                 const char *nm = class_getName(object_getClass(header));
+                BOOL hasSearch = WDTreeHasSearchBar(header, 0);
+                if (hasSearch) WDStyleSearchTree(header);
                 if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner"))) {
                     WDDecorateViewTree(header, 0);
-                } else if (WDHeaderOn()) {
+                } else if (WDHeaderOn() && !hasSearch) {
                     WDStyleClearHeader(header);
                 }
             }
@@ -956,9 +960,12 @@ static BOOL WDHookViewForHeader(const char *clsName) {
         id r = orig ? ((id (*)(id, SEL, id, NSInteger))orig)(slf, s, tv, section) : nil;
         if (gLive && gMaster && !gSafe && [r isKindOfClass:[UIView class]]) {
             @try {
+                // 搜索栏经常就挂在表头上（首页 / 通讯录），这里不刷就永远是方的
+                BOOL hasSearch = WDTreeHasSearchBar((UIView *)r, 0);
+                if (hasSearch) WDStyleSearchTree((UIView *)r);
                 const char *nm = class_getName(object_getClass(r));
                 if (nm && (strstr(nm, "FoldView") || strstr(nm, "Banner"))) WDDecorateViewTree((UIView *)r, 0);
-                else if (WDHeaderOn()) WDStyleClearHeader((UIView *)r);
+                else if (WDHeaderOn() && !hasSearch) WDStyleClearHeader((UIView *)r);
             } @catch (NSException *e) {}
         }
         return r;
@@ -1523,14 +1530,9 @@ static void WDDecorateVisible(void) {
                 if (tv.tableFooterView && WDHeaderOn()) @try { WDStyleClearHeader(tv.tableFooterView); } @catch (NSException *e) {}
                 if (tv.tableHeaderView) {
                     const char *hn = class_getName(object_getClass(tv.tableHeaderView));
-                    if (hn && strstr(hn, "SearchPanel")) {
-                        for (UIView *sv in tv.tableHeaderView.subviews) {
-                            const char *sn = class_getName(object_getClass(sv));
-                            if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar"))) {
-                                @try { WDStyleSearchTree(sv); } @catch (NSException *e) {}
-                            }
-                        }
-                    } else if (hn && strstr(hn, "SearchBar")) {
+                    if (hn && (strstr(hn, "SearchPanel") || strstr(hn, "SearchBar") ||
+                               strstr(hn, "ContactsSearch") || strstr(hn, "searchBar"))) {
+                        // 面板本身也可能就是搜索栏，交给 WDStyleSearchTree 自己找内层
                         @try { WDStyleSearchTree(tv.tableHeaderView); } @catch (NSException *e) {}
                     }
                 }
@@ -1558,12 +1560,8 @@ static void WDDecorateVisible(void) {
                         }
                     }
                 } else if (nm && strstr(nm, "SearchPanel")) {
-                    for (UIView *sv in v.subviews) {
-                        const char *sn = class_getName(object_getClass(sv));
-                        if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar"))) {
-                            @try { WDStyleSearchTree(sv); } @catch (NSException *e) {}
-                        }
-                    }
+                    // 面板自身也是搜索栏的一种，直接交给搜索树处理（找不到内层就刷面板）
+                    @try { WDStyleSearchTree(v); } @catch (NSException *e) {}
                 } else if (nm && (strstr(nm, "SearchBar") || strstr(nm, "FavSearchBar"))) {
                     @try { WDStyleSearchTree(v); } @catch (NSException *e) {}
                 }

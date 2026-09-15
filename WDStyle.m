@@ -343,14 +343,12 @@ static void WDPaintTableGap(UITableView *tv, UIColor *fill) {
     }
     tv.separatorColor = [UIColor clearColor];
     tv.separatorStyle = UITableViewCellSeparatorStyleNone;
-    // 标了"尾部透明"的表（新的朋友等）不刷底色，否则每次 cell 布局都会把留白涂回去
+    // 标了"尾部处理"的表（新的朋友等）：底色同样刷页面色，footer 已在挂载时清过
     if (objc_getAssociatedObject(tv, kWDTailClearKey)) {
-        tv.backgroundColor = [UIColor clearColor];
-        tv.opaque = NO;
-        if (tv.backgroundView) {
-            tv.backgroundView.backgroundColor = [UIColor clearColor];
-            tv.backgroundView.hidden = YES;
-        }
+        UIColor *page = fill ?: WDGapFillForView(tv) ?: WDGroupedFill();
+        tv.backgroundColor = page;
+        tv.opaque = YES;
+        if (tv.backgroundView) tv.backgroundView.backgroundColor = page;
         return;
     }
     if (!fill) fill = WDGroupedFill();
@@ -867,6 +865,20 @@ void WDStyleView(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, i
     (void)continuous;
 }
 
+// 搜索栏识别放宽：类名带 Search 之外，还认「有 searchBox 属性」的视图，
+// 首页/通讯录的搜索栏类名在不同版本里对不上号时也能刷到
+BOOL WDStyleIsSearchBarLike(UIView *v) {
+    if (!v) return NO;
+    const char *nm = class_getName(object_getClass(v));
+    if (nm && (strstr(nm, "SearchBar") || strstr(nm, "searchBar") ||
+               strstr(nm, "SearchBox") || strstr(nm, "searchBox") ||
+               strstr(nm, "SearchPanel") || strstr(nm, "searchField") ||
+               strstr(nm, "SearchInput"))) return YES;
+    if (WDSafeValue(v, "searchBoxContainer")) return YES;
+    if (WDSafeValue(v, "searchBox")) return YES;
+    return NO;
+}
+
 static UIView *WDSearchInnerBox(UIView *view) {
     if (!view) return nil;
     UIView *container = nil;
@@ -908,6 +920,16 @@ static UIView *WDSearchInnerBox(UIView *view) {
             UIView *p = cur.superview;
             if (p && p != view && p.bounds.size.height <= 52 && p.bounds.size.width > view.bounds.size.width * 0.5) return p;
             return cur;
+        }
+        // 再兜一层：那块「看得见的白底」就是胶囊 —— 够宽、高度像输入条、底色不透明
+        if (cur != view && cur.bounds.size.width >= view.bounds.size.width * 0.7 &&
+            cur.bounds.size.height >= 24 && cur.bounds.size.height <= 52) {
+            UIColor *bg = cur.backgroundColor;
+            BOOL hasInput = NO;
+            for (UIView *c in cur.subviews) {
+                if ([c isKindOfClass:[UITextField class]]) { hasInput = YES; break; }
+            }
+            if (hasInput || (bg && ![bg isEqual:[UIColor clearColor]])) return cur;
         }
         if (cur.subviews.count && n < 20) [q addObjectsFromArray:cur.subviews];
     }
@@ -975,10 +997,7 @@ static BOOL WDSearchIsWrapper(UIView *view) {
 
 static void WDStyleSearchInnerOnly(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous, int tag, int depth) {
     if (!view || depth > 5) return;
-    const char *nm = class_getName(object_getClass(view));
-    BOOL bar = nm && (strstr(nm, "WCSearchBar") || strstr(nm, "MMUISearchBar") ||
-                      strstr(nm, "FavSearchBar") || strstr(nm, "WAMainFrameTaskBarSearchBar"));
-    if (bar && view.bounds.size.height <= 56) {
+    if (WDStyleIsSearchBarLike(view) && view.bounds.size.height <= 56) {
         WDStyleSearch(view, inset, radius, continuous, tag);
         return;
     }
@@ -991,9 +1010,7 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
     CGRect bounds = view.bounds;
     if (bounds.size.width < 24 || bounds.size.height < 8) return;
     if (WDSearchIsWrapper(view)) {
-        const char *selfnm = class_getName(object_getClass(view));
-        BOOL selfIsBar = selfnm && (strstr(selfnm, "WCSearchBar") || strstr(selfnm, "MMUISearchBar") ||
-                                    strstr(selfnm, "FavSearchBar") || strstr(selfnm, "WAMainFrameTaskBarSearchBar"));
+        BOOL selfIsBar = WDStyleIsSearchBarLike(view);
         if (!selfIsBar || bounds.size.height > 56) {
             WDStyleSearchInnerOnly(view, inset, radius, continuous, tag, 0);
             return;
@@ -1063,13 +1080,9 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         return;
     }
     if (![view isKindOfClass:[UISearchBar class]]) {
-        const char *selfnm = class_getName(object_getClass(view));
-        BOOL selfIsBar = selfnm && (strstr(selfnm, "WCSearchBar") || strstr(selfnm, "MMUISearchBar"));
-        if (!selfIsBar) {
+        if (!WDStyleIsSearchBarLike(view)) {
             for (UIView *s in view.subviews) {
-                const char *sn = class_getName(object_getClass(s));
-                if (sn && (strstr(sn, "WCSearchBar") || strstr(sn, "MMUISearchBar") ||
-                           strstr(sn, "SearchBar") || strstr(sn, "searchBox"))) {
+                if (WDStyleIsSearchBarLike(s)) {
                     WDStyleSearch(s, inset, radius, continuous, tag);
                     return;
                 }
@@ -1233,7 +1246,12 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
     } @catch (NSException *e) {}
     WDHideLineViews(view, 0);
     WDPlacePlate(view, bounds, inx, radius, 15, NO, YES, NO);
+    // 资料卡和顶栏剥离开：顶部留一条缝，让四个圆角都露出来
+    CGFloat topGap = 10.0;
     CGRect hole = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(0, inx, 0, inx));
+    if (bounds.size.height > topGap * 2.0 + 40.0) {
+        hole = UIEdgeInsetsInsetRect(bounds, UIEdgeInsetsMake(topGap, inx, 0, inx));
+    }
     CGFloat rad = MIN(radius, MIN(hole.size.width, hole.size.height) / 2.0);
     UIView *fill = objc_getAssociatedObject(view, kWDProfileFillKey);
     if (![fill isKindOfClass:[UIView class]]) {
@@ -1247,6 +1265,17 @@ void WDStyleProfile(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous
     fill.layer.cornerRadius = rad;
     fill.layer.masksToBounds = YES;
     fill.clipsToBounds = YES;
+    // 盖在圆角卡上面的整块白色容器会让圆角看不见（"我"页顶栏下方就是这样），统一清透明
+    for (UIView *s in view.subviews) {
+        if (s == fill || s == (UIView *)objc_getAssociatedObject(view, kWDPlateKey)) continue;
+        if ([s isKindOfClass:[UILabel class]] || [s isKindOfClass:[UIControl class]]) continue;
+        if (s.bounds.size.width >= view.bounds.size.width * 0.9 &&
+            s.bounds.size.height >= view.bounds.size.height * 0.6) {
+            s.backgroundColor = [UIColor clearColor];
+            s.opaque = NO;
+            if ([s isKindOfClass:[UIImageView class]]) ((UIImageView *)s).image = nil;
+        }
+    }
     if (continuous) {
         if (@available(iOS 13.0, *)) {
             if ([fill.layer respondsToSelector:@selector(setCornerCurve:)]) {
@@ -1474,11 +1503,10 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
             objc_setAssociatedObject(cell, kWDArrowHiddenKey, sink, WD_ASSOC);
         }
     }
-    if (catRow) {
-        WDClearNudgeDeep(cell, 0);
-    } else {
-        WDBalanceInner(cell, inx);
-    }
+    if (catRow) WDClearNudgeDeep(cell, 0);
+    // 五个大类（新的朋友/群聊/标签/公众号/服务号）也要内容缩进：
+    // 旧的"位移补偿"会挤歪它们所以曾经跳过，现在改成收窄容器宽度，可以统一处理
+    WDBalanceInner(cell, inx);
     WDApplySelected(cell, inx, radius, corners);
     (void)continuous;
 }
@@ -1646,28 +1674,31 @@ static UITableView *WDFindTableIn(UIView *v, int depth) {
 void WDStyleClearTableTail(UIView *root) {
     UITableView *tv = WDFindTableIn(root, 0);
     if (!tv) return;
+    // 用页面底色而不是全透明：上一版清成透明会露出黑色的 window，页面直接变黑
+    UIColor *page = WDGapFillForView(tv) ?: WDResolvedOut();
     if (!objc_getAssociatedObject(tv, kWDTableBgKey)) {
         objc_setAssociatedObject(tv, kWDTableBgKey, tv.backgroundColor ?: (id)[NSNull null], WD_ASSOC);
     }
     objc_setAssociatedObject(tv, kWDTailClearKey, @YES, WD_ASSOC);
-    tv.backgroundColor = [UIColor clearColor];
-    tv.opaque = NO;
+    tv.backgroundColor = page;
+    tv.opaque = YES;
     if (tv.backgroundView) {
-        tv.backgroundView.backgroundColor = [UIColor clearColor];
+        tv.backgroundView.backgroundColor = page;
         tv.backgroundView.opaque = NO;
-        tv.backgroundView.hidden = YES;
+        tv.backgroundView.hidden = NO;
     }
     tv.separatorColor = [UIColor clearColor];
     tv.separatorStyle = UITableViewCellSeparatorStyleNone;
     if (tv.tableFooterView) WDStyleClearHeader(tv.tableFooterView);
+    // 表格底下若还有一层白色容器（内容短时露出一大片），同样刷成页面底色
     UIView *p = tv.superview;
     int d = 0;
     while (p && d < 4) {
         if ([p isKindOfClass:[UIWindow class]]) break;
         const char *pn = class_getName(object_getClass(p));
         if (pn && (strstr(pn, "NavigationBar") || strstr(pn, "TabBar"))) break;
-        p.backgroundColor = [UIColor clearColor];
-        p.opaque = NO;
+        p.backgroundColor = page;
+        p.opaque = YES;
         p = p.superview;
         d++;
     }
