@@ -130,30 +130,54 @@ class MachO(object):
             end = max(end, self.segs["__LINKEDIT"][3])
         return end
 
+    def linkedit_content_start(self):
+        """File offset where real __LINKEDIT content begins (min of all
+        content-carrying linkedit commands). Excludes the signature blob."""
+        d = self.d
+        starts = []
+        off = 32
+        for _ in range(self.ncmds):
+            cmd, size = struct.unpack_from("<II", d, off)
+            if cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY):
+                starts.append(struct.unpack_from("<I", d, off + 8)[0])
+            elif cmd in LINKEDIT_DATA_CMDS and cmd != LC_CODE_SIGNATURE:
+                doff, dsz = struct.unpack_from("<II", d, off + 8)
+                if dsz:
+                    starts.append(doff)
+            elif cmd == LC_SYMTAB:
+                symoff, nsyms, stroff, strsize = struct.unpack_from("<IIII", d, off + 8)
+                if nsyms:
+                    starts.append(symoff)
+                if strsize:
+                    starts.append(stroff)
+            off += size
+        return min(starts) if starts else None
+
     def repair_linkedit(self):
+        """__LINKEDIT fileoff must cover its real content. It does NOT need
+        to equal vmaddr - slide: a gap is standard Mach-O whenever __DATA
+        has bss (zero-fill) pages, and dyld computes a per-segment slide.
+
+        Moving fileoff up to vmaddr - slide (the old behaviour) orphans the
+        dyld info / symtab / string table outside the segment and leaves
+        __LINKEDIT holding ONLY the signature blob. TrollFools' ct_bypass
+        then computes blockPaddingSize = filesize - originalSigSize == 0 and
+        fails with "failed to get existing values for __LINKEDIT segment".
+        """
         if "__LINKEDIT" not in self.segs:
             return
         lc, vmaddr, _vmsize, fileoff, _filesize = self.segs["__LINKEDIT"]
-        slides = [s[1] - s[3] for n, s in self.segs.items() if n != "__LINKEDIT"]
-        slide = min(slides) if slides else 0
-        want = vmaddr - slide
-        if fileoff == want:
-            return
-        # 只在「修完仍指向文件内部」时才修。否则会把 fileoff 推到文件之外，
-        # 后面算 __LINKEDIT 的 filesize 会变成负数并直接 struct.error
-        # （v1.1.0 的 dylib 变大后 fileoff/vmaddr 出现间隙就踩到了）。
-        if want < 0 or want > len(self.d):
-            print(f"skip __LINKEDIT fileoff repair 0x{fileoff:x} -> 0x{want:x} "
-                  f"(target outside file, size=0x{len(self.d):x})")
-            return
-        if want < fileoff:
-            print(f"skip __LINKEDIT fileoff repair 0x{fileoff:x} -> 0x{want:x} (backwards)")
-            return
-        print(f"repair __LINKEDIT fileoff 0x{fileoff:x} -> 0x{want:x} "
-              f"(vmaddr=0x{vmaddr:x}, slide=0x{slide:x})")
-        struct.pack_into("<Q", self.d, lc + 40, want)
-        self.segs["__LINKEDIT"][3] = want
-        self.scan()
+        start = self.linkedit_content_start()
+        if start is not None and fileoff > start:
+            print(f"repair __LINKEDIT fileoff 0x{fileoff:x} -> 0x{start:x} "
+                  f"(vmaddr=0x{vmaddr:x}; segment must cover its real content)")
+            struct.pack_into("<Q", self.d, lc + 40, start)
+            self.segs["__LINKEDIT"][3] = start
+            self.scan()
+        else:
+            want = vmaddr - min([s[1] - s[3] for n, s in self.segs.items() if n != "__LINKEDIT"] or [0])
+            print(f"keep __LINKEDIT fileoff 0x{fileoff:x} (vmaddr=0x{vmaddr:x}, "
+                  f"vmaddr-slide=0x{want:x}; gap is normal, not repairing)")
 
     def repair_uuid(self):
         """v2 wrote SuperBlob offsets into LC_UUID. Restore a random UUID."""
@@ -296,6 +320,17 @@ def validate(path):
                         f"sig=[0x{dataoff:x},0x{dataoff+datasize:x})")
         if lfo + lfs != size:
             errs.append(f"__LINKEDIT does not end at EOF: 0x{lfo+lfs:x} != 0x{size:x}")
+        # ct_bypass (TrollFools/TrollStore) 要求段内有 padding：
+        # blockPaddingSize = filesize - 原签名 datasize 必须 > 0，
+        # vmaddr/fileoff 也不能为 0，否则注入报
+        # "failed to get existing values for __LINKEDIT segment"。
+        if lfs <= datasize:
+            errs.append(f"__LINKEDIT has no padding: filesize 0x{lfs:x} <= "
+                        f"signature 0x{datasize:x} (ct_bypass would reject)")
+        if le[1] == 0:
+            errs.append("__LINKEDIT vmaddr is 0 (ct_bypass would reject)")
+        if lfo == 0:
+            errs.append("__LINKEDIT fileoff is 0 (ct_bypass would reject)")
 
     order = sorted(m.segs.values(), key=lambda s: s[3])
     for a, b in zip(order, order[1:]):
