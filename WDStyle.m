@@ -530,6 +530,30 @@ static void WDHideNativeSeparators(UITableViewCell *cell) {
     if (cell.contentView) WDHideLineViews(cell.contentView, 0);
 }
 
+// 朋友圈专用：分割线常常是 UIImageView 画的 1px 横条（上面的通用逻辑
+// 为保头像把 UIImageView 排除了）。这里只命中「高 ≤2.5 且宽 >30」的
+// 细横条 —— 头像/配图都是大图，不会误伤。
+static void WDHideMomentsLines(UIView *v, int depth) {
+    if (!v || depth > 7) return;
+    const char *nm = class_getName(object_getClass(v));
+    if (nm && (strstr(nm, "Separator") || strstr(nm, "separator") ||
+               strstr(nm, "LineView") || strstr(nm, "lineView") ||
+               strstr(nm, "bottomLine") || strstr(nm, "BottomLine"))) {
+        v.hidden = YES;
+        v.alpha = 0;
+        return;
+    }
+    CGFloat h = v.bounds.size.height, w = v.bounds.size.width;
+    if (depth > 0 && h > 0.5 && h <= 2.5 && w > 30 &&
+        ![v isKindOfClass:[UILabel class]] && ![v isKindOfClass:[UIControl class]]) {
+        v.hidden = YES;
+        v.alpha = 0;
+        if ([v isKindOfClass:[UIImageView class]]) v.image = nil;
+        return;
+    }
+    for (UIView *s in v.subviews) WDHideMomentsLines(s, depth + 1);
+}
+
 static void WDClearFillViews(UIView *v, int depth) {
     if (!v || depth > 3) return;
     const char *nm = class_getName(object_getClass(v));
@@ -690,6 +714,12 @@ BOOL WDStyleIsMomentsCell(UITableViewCell *cell) {
     if (!cell) return NO;
     id c = objc_getAssociatedObject(cell, kWDMomentsKey);
     if (c) return [c boolValue];
+    // 先看 cell 自己的类名：子树内容可能还没装进来，类名是最稳的信号
+    const char *cn = class_getName(object_getClass(cell));
+    if (cn && ((strstr(cn, "WCList") && strstr(cn, "CellView")) || strstr(cn, "SNS"))) {
+        objc_setAssociatedObject(cell, kWDMomentsKey, @YES, WD_ASSOC);
+        return YES;
+    }
     // 内容可能还没装进来：命中才缓存，没命中下次布局再查
     if (WDMomentsScan(cell, 0)) {
         objc_setAssociatedObject(cell, kWDMomentsKey, @YES, WD_ASSOC);
@@ -1110,9 +1140,9 @@ static void WDSearchNarrow(UIView *bar, CGFloat inx) {
     if (!bar || inx < 0.5) return;
     UIView *p = bar.superview;
     if (!p) return;
-    // 表格会强制子视图宽度，这种挪不动，交给胶囊兜底
-    if ([p isKindOfClass:[UITableView class]] ||
-        [p isKindOfClass:[UITableViewHeaderFooterView class]]) return;
+    // 表格会强制子视图宽度，这种挪不动，交给胶囊兜底；
+    // 表头容器（UITableViewHeaderFooterView）可以收，里面的子视图微信不会强制复位
+    if ([p isKindOfClass:[UITableView class]]) return;
     if (p.bounds.size.width < bar.bounds.size.width + inx * 2.0 - 1.0) return;
     CGFloat w = p.bounds.size.width;
     CGRect want = CGRectMake(inx, bar.frame.origin.y, MAX(40, w - inx * 2.0), bar.frame.size.height);
@@ -1242,14 +1272,14 @@ void WDStyleSearch(UIView *view, CGFloat inset, CGFloat radius, BOOL continuous,
         // 全圆（半径=高/2）只对真正的输入条用；再高的容器全圆就变成巨型胶囊了
         CGFloat br = (ch > 0 && ch <= 48) ? MIN(radius, ch / 2.0) : MIN(radius, 18.0);
         WDStyleRound(capsule, br, continuous, tag);
-        // 胶囊用系统搜索框灰，不用卡片内色 —— 首页/通讯录的搜索栏外壳是白的，
-        // 白胶囊贴白底 = 隐形，整条看起来就是一条没样式的白带
-        UIColor *capC;
-        if (@available(iOS 13.0, *)) {
-            capC = [UIColor tertiarySystemFillColor];
-        } else {
-            capC = [UIColor colorWithWhite:0.93 alpha:1.0];
-        }
+        // 胶囊用卡片内色：外壳/表头已被清透明（露出页面灰底），
+        // 白色圆角胶囊贴在灰底上 = 原生的「缩进 + 圆角」观感
+        UIColor *capC = WDResolvedIn() ?: ({
+            UIColor *c;
+            if (@available(iOS 13.0, *)) c = [UIColor tertiarySystemFillColor];
+            else c = [UIColor colorWithWhite:0.93 alpha:1.0];
+            c;
+        });
         capsule.backgroundColor = capC;
         @try { [view setValue:capC forKey:@"searchBoxContainerColor"]; } @catch (NSException *e) {}
         // 胶囊外面如果还套着画了底的容器（60~70pt 高的白条），一并清掉，
@@ -1656,6 +1686,7 @@ void WDStyleCellAt(UITableViewCell *cell, UITableView *tv, NSIndexPath *ip, CGFl
     }
     CGFloat vgap = moments ? WD_MOMENTS_VGAP : 0;
     WDPlacePlate(cell, bounds, inx, radius, corners, showSep, YES, NO, vgap);
+    if (moments) WDHideMomentsLines(cell, 0);
 
     UIColor *inC = WDResolvedIn();
     cell.backgroundColor = inC;
@@ -1910,6 +1941,7 @@ void WDStyleCellRelayout(UITableViewCell *cell) {
             WDPlacePlate(cell, b, inx, rad, corners, showSep, YES, NO, vgap);
             WDBalanceInner(cell, inx);
             WDClampSwipeStrips(cell, inx);
+            if (moments) WDHideMomentsLines(cell, 0);
         }
     } @catch (NSException *e) {}
     objc_setAssociatedObject(cell, kWDStyleBusyKey, nil, WD_ASSOC);

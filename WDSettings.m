@@ -12,8 +12,9 @@
 @implementation WDCell
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)rid {
     if ((self = [super initWithStyle:style reuseIdentifier:rid])) {
-        self.textLabel.font = [UIFont systemFontOfSize:16];
-        self.detailTextLabel.font = [UIFont systemFontOfSize:12];
+        // 跟随本机字体（含用户在系统设置里调的字号）
+        self.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+        self.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
         if (@available(iOS 13.0, *)) {
             self.detailTextLabel.textColor = [UIColor secondaryLabelColor];
         }
@@ -100,7 +101,9 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.tableView.rowHeight = 52;
+    // 行高随本机字体大小自适应（大字号下不挤）
+    CGFloat lh = [UIFont preferredFontForTextStyle:UIFontTextStyleBody].lineHeight;
+    self.tableView.rowHeight = MAX(48.0, ceil(lh + 26.0));
     if (@available(iOS 13.0, *)) {
         self.tableView.backgroundColor = [UIColor systemGroupedBackgroundColor];
     } else {
@@ -136,7 +139,8 @@
     f.keyboardType = UIKeyboardTypeNumberPad;
     f.returnKeyType = UIReturnKeyDone;
     f.textAlignment = NSTextAlignmentCenter;
-    f.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightRegular];
+    f.font = [UIFont monospacedDigitSystemFontOfSize:[UIFont preferredFontForTextStyle:UIFontTextStyleBody].pointSize
+                                             weight:UIFontWeightRegular];
     f.text = v ?: @"";
     f.placeholder = ph ?: @"";
     f.tag = tag;
@@ -375,7 +379,7 @@
     UITextView *tv = [[UITextView alloc] initWithFrame:self.view.bounds];
     tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     tv.editable = NO;
-    tv.font = [UIFont systemFontOfSize:11];
+    tv.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
     if (@available(iOS 13.0, *)) {
         tv.backgroundColor = [UIColor secondarySystemGroupedBackgroundColor];
         tv.textColor = [UIColor labelColor];

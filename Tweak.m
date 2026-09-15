@@ -168,6 +168,48 @@ static int WDIdxForClass(Class c) {
 #pragma mark - 快照
 
 static BOOL WDHookDidLayout(const char *clsName, int kind);
+static void WDPageBgApply(void);
+
+// 切 tab 后微信会把「我」页资料卡等重置回原生，而 VC 的 viewDidLayoutSubviews
+// 未必再触发。挂 tab 控制器的 setSelectedIndex:，切换时对目标页强制
+// setNeedsLayout + layoutIfNeeded，让已有的 didLayout 钩子全部重跑。
+static void WDHookTabSelectDynamic(UITabBarController *tab) {
+    if (!tab) return;
+    Class cls = [tab class];
+    static Class hookedCls = nil;
+    if (hookedCls == cls) return;
+    SEL s = @selector(setSelectedIndex:);
+    Method m = class_getInstanceMethod(cls, s);
+    if (!m) return;
+    IMP orig = (WDOwns(cls, s) && m) ? method_getImplementation(m) : NULL;
+    IMP stub = imp_implementationWithBlock(^(id slf, NSUInteger idx) {
+        if (orig) ((void (*)(id, SEL, NSUInteger))orig)(slf, s, idx);
+        if (!gLive || !gMaster || gSafe) return;
+        if (![NSThread isMainThread]) return;
+        @try { WDPageBgApply(); } @catch (NSException *e) {}
+        UITabBarController *tb = (UITabBarController *)slf;
+        if (![tb isKindOfClass:[UITabBarController class]]) return;
+        NSArray *vcs = tb.viewControllers;
+        if (idx >= (NSUInteger)vcs.count) return;
+        UIViewController *vc = vcs[idx];
+        if (!vc.isViewLoaded || !vc.view) return;
+        WDNoAnim(^{ @try {
+            [vc.view setNeedsLayout];
+            [vc.view layoutIfNeeded];
+        } @catch (NSException *e) {} });
+    });
+    BOOL ok = NO;
+    if (WDOwns(cls, s) && m) { method_setImplementation(m, stub); ok = YES; }
+    else {
+        const char *enc = m ? method_getTypeEncoding(m) : "v@:Q";
+        ok = class_addMethod(cls, s, stub, enc);
+    }
+    if (ok) {
+        hookedCls = cls;
+        WDDiagLogOnce([@"tabselect" stringByAppendingString:NSStringFromClass(cls)],
+                      @"[tab] 已挂切换钩子: %@（切 tab 时强制重贴）", NSStringFromClass(cls));
+    }
+}
 
 // 运行时从窗口根视图找 UITabBarController，把每个 tab 子页都挂上 kind=3。
 // 类名硬编码（NewMainFrameViewController 等）在部分微信版本上挂不上 ——
@@ -190,6 +232,7 @@ static void WDDiscoverTabChildren(void) {
         if (vc.childViewControllers.count) [q addObjectsFromArray:vc.childViewControllers];
     }
     if (!tab || tab.viewControllers.count == 0) return;
+    WDHookTabSelectDynamic(tab);
     for (UIViewController *vc in tab.viewControllers) {
         NSString *nm = NSStringFromClass([vc class]);
         if (![nm isKindOfClass:[NSString class]] || nm.length == 0) continue;
