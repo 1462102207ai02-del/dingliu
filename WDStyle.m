@@ -548,7 +548,7 @@ static void WDHideMomentsLines(UIView *v, int depth) {
         ![v isKindOfClass:[UILabel class]] && ![v isKindOfClass:[UIControl class]]) {
         v.hidden = YES;
         v.alpha = 0;
-        if ([v isKindOfClass:[UIImageView class]]) v.image = nil;
+        if ([v isKindOfClass:[UIImageView class]]) ((UIImageView *)v).image = nil;
         return;
     }
     for (UIView *s in v.subviews) WDHideMomentsLines(s, depth + 1);
